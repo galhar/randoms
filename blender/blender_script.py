@@ -119,19 +119,38 @@ def randomize_camera(
     x, y, z = _sample_spherical(
         radius_min=radius_min, radius_max=radius_max, maxz=maxz, minz=minz
     )
-    camera = bpy.data.objects["Camera"]
-
     # only positive z
     if only_northern_hemisphere:
         z = abs(z)
 
-    camera.location = Vector(np.array([x, y, z]))
+    camera = setup_camera(x, y, z)
 
+    return camera
+
+
+def set_camera_on_circle(i, n_views):
+    angle_step = 360.0 / n_views
+    radius = 1.5
+    angle_deg = -180 + i * angle_step
+    angle_rad = math.radians(angle_deg)
+    x = radius * math.cos(angle_rad)
+    y = radius * math.sin(angle_rad)
+    z = 0.5
+
+    return setup_camera(x, y, z), angle_deg
+
+
+
+def setup_camera(x, y, z):
+    camera = bpy.data.objects["Camera"]
+    camera.location = Vector(np.array([x, y, z]))
     direction = -camera.location
     rot_quat = direction.to_track_quat("-Z", "Y")
     camera.rotation_euler = rot_quat.to_euler()
-
     return camera
+
+
+
 
 
 def _set_camera_at_size(i: int, scale: float = 1.5) -> bpy.types.Object:
@@ -730,6 +749,43 @@ class MetadataExtractor:
         }
 
 
+# def get_states_in_frame(scene, frame):
+#     """Check if the objects in the scene have no motion at a given frame."""
+#     scene.frame_set(frame)
+#     obj_states = [
+#         (obj.location.copy(), obj.rotation_euler.copy(), obj.scale.copy())
+#         for obj in scene.objects if obj.animation_data is not None
+#     ]
+#
+#     return obj_states
+
+def get_states_in_frame(scene, frame):
+    """Check if the objects in the scene have motion at a given frame."""
+    scene.frame_set(frame)
+    obj_states = []
+
+    for obj in scene.objects:
+        # Check basic object animation (location, rotation, scale)
+        if obj.animation_data is not None:
+            state = (
+                obj.location.copy(),
+                obj.rotation_euler.copy(),
+                obj.scale.copy(),
+            )
+            obj_states.append((obj.name, state))
+
+        # Check armature-based animations
+        if obj.type == "ARMATURE" and obj.pose is not None:
+            for bone in obj.pose.bones:
+                bone_state = (
+                    bone.matrix.copy()  # Bone transformation matrix
+                )
+                obj_states.append((f"{obj.name}.{bone.name}", bone_state))
+
+    return obj_states
+
+
+
 def render_object(
     object_file: str,
     num_renders: int,
@@ -813,20 +869,38 @@ def render_object(
     # render the images
     for i in range(num_renders):
         # set camera
-        camera = randomize_camera(
-            only_northern_hemisphere=only_northern_hemisphere,
-        )
+        # camera = randomize_camera(
+        #     only_northern_hemisphere=only_northern_hemisphere,
+        # )
+        camera, view_angle = set_camera_on_circle(i, num_renders)
+        view_dir = f"{view_angle:.2f}"
+        os.makedirs(os.path.join(output_dir, view_dir), exist_ok=True)
+        cur_output_dir = os.path.join(output_dir, view_dir)
 
         # render the image
-        render_path = os.path.join(output_dir, f"{i:03d}.png")
-        scene.render.filepath = render_path
-        bpy.ops.render.render(write_still=True)
+        # render_path = os.path.join(output_dir, f"{i:03d}.png")
+        # scene.render.filepath = render_path
+        # import pdb; pdb.set_trace()
+        # bpy.ops.render.render(write_still=True)
+
+        # Render the animation frame-by-frame
+        prev_states = None
+        for frame in range(scene.frame_start, scene.frame_end + 1):
+            cur_states = get_states_in_frame(scene, frame)
+            if cur_states == prev_states:
+                # Recognize the animation stopped and stop rendering extra frames
+                break
+            prev_states = cur_states
+
+            scene.frame_set(frame)  # Set the current frame
+            render_path = os.path.join(cur_output_dir, f"{frame - 1}.png")
+            scene.render.filepath = render_path
+            bpy.ops.render.render(write_still=True)  # Render the current frame
 
         # save camera RT matrix
         rt_matrix = get_3x4_RT_matrix_from_blender(camera)
-        rt_matrix_path = os.path.join(output_dir, f"{i:03d}.npy")
+        rt_matrix_path = os.path.join(cur_output_dir, f"rt_matrix.npy")
         np.save(rt_matrix_path, rt_matrix)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
