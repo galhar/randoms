@@ -1,6 +1,8 @@
 import subprocess
 import os
 import argparse
+from datetime import datetime
+
 import imageio.v3 as imageio
 import numpy as np
 
@@ -10,6 +12,12 @@ if __name__ == "__main__":
         "--motions_dir",
         type=str,
         help="The path to the motions_dir containing .glb files for rendering."
+    )
+    parser.add_argument(
+        "--floor_texture_path",
+        type=str,
+        default=None,
+        help="Path to the floor texture png",
     )
     args = parser.parse_args()
 
@@ -42,12 +50,13 @@ if __name__ == "__main__":
         os.makedirs(output_dir, exist_ok=True)
 
         # Construct the blender command with dynamically populated paths
-        args = f"--object_path '{obj_path}' --num_renders {n_views} --output_dir '{output_dir}' --engine CYCLES"
+        args = f"--object_path '{obj_path}' --floor_texture_path '{args.floor_texture_path}' --num_renders {n_views} --output_dir '{output_dir}'"# --engine CYCLES"
         command = f"/snap/blender/current/blender --background --python blender_script.py -- {args}"
         full_command = f"export DISPLAY=:0.{gpu_i} && {command}"
 
         # Render each object, capturing output
         # TODO: continue debug why the dino get an animation only on its first frame (same happened a lot in the animals) then re-render the animals and human again, to have it for tomorrow
+        print(datetime.now())
         print(full_command)
         res = subprocess.run(
             ["bash", "-c", full_command],

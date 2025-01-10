@@ -130,21 +130,21 @@ def randomize_camera(
 
 def set_camera_on_circle(i, n_views):
     angle_step = 360.0 / n_views
-    radius = 1.5
+    radius = 1.25
     angle_deg = -180 + i * angle_step
     angle_rad = math.radians(angle_deg)
     x = radius * math.cos(angle_rad)
     y = radius * math.sin(angle_rad)
-    z = 0.5
+    z = 0.25
 
-    return setup_camera(x, y, z), angle_deg
+    return setup_camera(x, y, z, 0.1), angle_deg
 
 
 
-def setup_camera(x, y, z):
+def setup_camera(x, y, z, direction_lift: float = 0):
     camera = bpy.data.objects["Camera"]
     camera.location = Vector(np.array([x, y, z]))
-    direction = -camera.location
+    direction = -camera.location + Vector([0, 0, direction_lift])
     rot_quat = direction.to_track_quat("-Z", "Y")
     camera.rotation_euler = rot_quat.to_euler()
     return camera
@@ -788,6 +788,7 @@ def get_states_in_frame(scene, frame):
 
 def render_object(
     object_file: str,
+    floor_texture_path: str,
     num_renders: int,
     only_northern_hemisphere: bool,
     output_dir: str,
@@ -824,12 +825,12 @@ def render_object(
     cam.data.sensor_width = 32
 
     # Set up camera constraints
-    cam_constraint = cam.constraints.new(type="TRACK_TO")
-    cam_constraint.track_axis = "TRACK_NEGATIVE_Z"
-    cam_constraint.up_axis = "UP_Y"
-    empty = bpy.data.objects.new("Empty", None)
-    scene.collection.objects.link(empty)
-    cam_constraint.target = empty
+    # cam_constraint = cam.constraints.new(type="TRACK_TO")
+    # cam_constraint.track_axis = "TRACK_NEGATIVE_Z"
+    # cam_constraint.up_axis = "UP_Y"
+    # empty = bpy.data.objects.new("Empty", None)
+    # scene.collection.objects.link(empty)
+    # cam_constraint.target = empty
 
     # Extract the metadata. This must be done before normalizing the scene to get
     # accurate bounding box information.
@@ -862,6 +863,8 @@ def render_object(
 
     # normalize the scene
     normalize_scene()
+    if floor_texture_path is not None:
+        add_floor_plane(texture_path=floor_texture_path)
 
     # randomize the lighting
     randomize_lighting()
@@ -902,6 +905,26 @@ def render_object(
         rt_matrix_path = os.path.join(cur_output_dir, f"rt_matrix.npy")
         np.save(rt_matrix_path, rt_matrix)
 
+
+def add_floor_plane(texture_path, size=10, target_z=-1):
+    plane = bpy.ops.mesh.primitive_plane_add(size=size, location=(0, 0, target_z))
+    floor_plane = bpy.context.object
+    floor_plane.name = "Floor_Plane"
+
+    material = bpy.data.materials.new(name="Floor_Material")
+    material.use_nodes = True
+
+    texture_node = material.node_tree.nodes.new(type="ShaderNodeTexImage")
+    texture_node.image = bpy.data.images.load(texture_path)
+    material.node_tree.links.new(
+        texture_node.outputs["Color"],
+        material.node_tree.nodes["Principled BSDF"].inputs["Base Color"]
+    )
+
+    floor_plane.data.materials.append(material)
+    print(f"Floor plane added: size={size}, target_z={target_z}, texture={texture_path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -909,6 +932,12 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help="Path to the object file",
+    )
+    parser.add_argument(
+        "--floor_texture_path",
+        type=str,
+        default=None,
+        help="Path to the floor texture png",
     )
     parser.add_argument(
         "--output_dir",
@@ -967,6 +996,7 @@ if __name__ == "__main__":
     # Render the images
     render_object(
         object_file=args.object_path,
+        floor_texture_path=args.floor_texture_path,
         num_renders=args.num_renders,
         only_northern_hemisphere=args.only_northern_hemisphere,
         output_dir=args.output_dir,
