@@ -7,11 +7,11 @@ import imageio.v3 as imageio
 import numpy as np
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate renders for .glb files in a given directory.")
+    parser = argparse.ArgumentParser(description="Generate renders for files in a given directory.")
     parser.add_argument(
-        "--motions_dir",
+        "--objects_dir",
         type=str,
-        help="The path to the motions_dir containing .glb files for rendering."
+        help="The path to the objects_dir containing .glb files for rendering."
     )
     parser.add_argument(
         "--floor_texture_path",
@@ -19,45 +19,54 @@ if __name__ == "__main__":
         default=None,
         help="Path to the floor texture png",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="motions",
+        choices=["motions", "blendernerf"],
+        help="Mode to specify the rendering process. 'motions' for animation frames, 'blendernerf' for BlenderNeRF dataset.",
+    )
     args = parser.parse_args()
 
-    input_dir = args.motions_dir
+    objects_dir = args.objects_dir
 
-    # Ensure the provided motions_dir exists
-    if not os.path.isdir(input_dir):
-        raise NotADirectoryError(f"The motions_dir '{input_dir}' does not exist.")
+    # Ensure the provided objects_dir exists
+    if not os.path.isdir(objects_dir):
+        raise NotADirectoryError(f"The objects_dir '{objects_dir}' does not exist.")
 
-    # Create 'renders' folder inside the input motions_dir if it doesn't exist
-    renders_dir = os.path.join(input_dir, "renders")
+    # Create 'renders' folder inside the input objects_dir if it doesn't exist
+    # Determine the output folder name based on the mode
+    output_folder_name = "renders" if args.mode == "motions" else "datasets"
+    renders_dir = os.path.join(objects_dir, output_folder_name)
     os.makedirs(renders_dir, exist_ok=True)
 
-    # Get all .glb files in the specified motions_dir
-    glb_files = [file for file in os.listdir(input_dir) if file.endswith(".glb")]
+    # Get all .glb, .fbx, and .obj files in the specified objects_dir
+    supported_formats = [".glb", ".fbx", ".obj"]
+    model_files = [file for file in os.listdir(objects_dir) if any(file.endswith(ext) for ext in supported_formats)]
 
-    if not glb_files:
-        print(f"No .glb files found in the motions_dir '{input_dir}'.")
+    if not model_files:
+        print(f"No supported files (.glb, .fbx, .obj) found in the objects_dir '{objects_dir}'.")
         exit(1)
     
     n_views = 16
     gpu_i = 0
 
-    # Iterate over each .glb file in the motions_dir
-    for glb_file in glb_files:
-        obj_path = os.path.join(input_dir, glb_file)
+    # Iterate over each .glb file in the objects_dir
+    for model_file in model_files:
+        obj_path = os.path.join(objects_dir, model_file)
 
         # Create a dedicated output folder for each .glb file
-        output_dir = os.path.join(renders_dir, os.path.splitext(glb_file)[0])  # renders/<glb_name>
+        output_dir = os.path.join(renders_dir, os.path.splitext(model_file)[0])  # renders/<glb_name>
         os.makedirs(output_dir, exist_ok=True)
 
         # Construct the blender command with dynamically populated paths
-        blender_args = f"--object_path '{obj_path}' --num_renders {n_views} --output_dir '{output_dir}'"# --engine CYCLES"
-        if args.floor_texture_path:
+        blender_args = f"--object_path '{obj_path}' --num_renders {n_views} --output_dir '{output_dir}' --mode {args.mode}"# --engine CYCLES"
+        if args.floor_texture_path is not None:
             blender_args += f" --floor_texture_path '{args.floor_texture_path}'"
         command = f"/snap/blender/current/blender --background --python blender_script.py -- {blender_args}"
         full_command = f"export DISPLAY=:0.{gpu_i} && {command}"
 
         # Render each object, capturing output
-        # TODO: continue debug why the dino get an animation only on its first frame (same happened a lot in the animals) then re-render the animals and human again, to have it for tomorrow
         print(datetime.now())
         print(full_command)
         try:

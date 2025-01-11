@@ -6,9 +6,11 @@ import math
 import os
 import random
 import sys
+import time
 from typing import Any, Callable, Dict, Generator, List, Literal, Optional, Set, Tuple
 
 import bpy
+import addon_utils
 import numpy as np
 from mathutils import Matrix, Vector
 
@@ -128,7 +130,7 @@ def randomize_camera(
     return camera
 
 
-def set_camera_on_circle(i, n_views):
+def set_camera_on_circle(i, n_views) -> Tuple[bpy.types.Object, float]:
     angle_step = 360.0 / n_views
     radius = 1.25
     angle_deg = -180 + i * angle_step
@@ -796,8 +798,9 @@ def render_object(
     num_renders: int,
     only_northern_hemisphere: bool,
     output_dir: str,
+    mode: str,
 ) -> None:
-    """Saves rendered images with its camera matrix and metadata of the object.
+    """Saves rendered images or creates datasets with its camera parameters and metadata of the object.
 
     Args:
         object_file (str): Path to the object file.
@@ -873,41 +876,45 @@ def render_object(
     # randomize the lighting
     randomize_lighting()
 
-    # render the images
-    for i in range(num_renders):
-        # set camera
-        # camera = randomize_camera(
-        #     only_northern_hemisphere=only_northern_hemisphere,
-        # )
-        camera, view_angle = set_camera_on_circle(i, num_renders)
-        view_dir = f"{view_angle:.2f}"
-        os.makedirs(os.path.join(output_dir, view_dir), exist_ok=True)
-        cur_output_dir = os.path.join(output_dir, view_dir)
+    if mode == "motions":
+        # render animation frames
+        for i in range(num_renders):
+            camera, view_angle = set_camera_on_circle(i, num_renders)
+            view_dir = f"{view_angle:.2f}"
+            os.makedirs(os.path.join(output_dir, view_dir), exist_ok=True)
+            cur_output_dir = os.path.join(output_dir, view_dir)
+    
+            prev_states = None
+            for frame in range(scene.frame_start, scene.frame_end + 1):
+                cur_states = get_states_in_frame(scene, frame)
+                if cur_states == prev_states:
+                    # recognize animation stopped
+                    break
+                prev_states = cur_states
+    
+                scene.frame_set(frame)
+                render_path = os.path.join(cur_output_dir, f"{frame - 1}.png")
+                scene.render.filepath = render_path
+                bpy.ops.render.render(write_still=True)
+    
+            rt_matrix = get_3x4_RT_matrix_from_blender(camera)
+            rt_matrix_path = os.path.join(cur_output_dir, f"rt_matrix.npy")
+            np.save(rt_matrix_path, rt_matrix)
 
-        # render the image
-        # render_path = os.path.join(output_dir, f"{i:03d}.png")
-        # scene.render.filepath = render_path
-        # import pdb; pdb.set_trace()
-        # bpy.ops.render.render(write_still=True)
+    elif mode == "blendernerf":
+        addon_utils.enable("bl_ext.user_default.BlenderNeRF")
 
-        # Render the animation frame-by-frame
-        prev_states = None
-        for frame in range(scene.frame_start, scene.frame_end + 1):
-            cur_states = get_states_in_frame(scene, frame)
-            if cur_states == prev_states:
-                # Recognize the animation stopped and stop rendering extra frames
-                break
-            prev_states = cur_states
 
-            scene.frame_set(frame)  # Set the current frame
-            render_path = os.path.join(cur_output_dir, f"{frame - 1}.png")
-            scene.render.filepath = render_path
-            bpy.ops.render.render(write_still=True)  # Render the current frame
-
-        # save camera RT matrix
-        rt_matrix = get_3x4_RT_matrix_from_blender(camera)
-        rt_matrix_path = os.path.join(cur_output_dir, f"rt_matrix.npy")
-        np.save(rt_matrix_path, rt_matrix)
+        try:
+            bpy.ops.object.camera_on_sphere()
+        except RuntimeError as e:
+            # There is some weird phenomena in which the save_path is empty in the first time I try to run it even if I set its value before, then I can set its value and run again and it works..
+            # The RuntimeError we intend to catch here - "Error: Save path cannot be empty!"
+            pass
+        bpy.context.scene.save_path = output_dir  # Replace with your desired path
+        bpy.context.scene.sphere_radius = 2.5  # Replace with your desired value
+        scene.splats = True
+        bpy.ops.object.camera_on_sphere()
 
 
 def add_floor_plane(texture_path, size=10, target_z=-1):
@@ -967,6 +974,13 @@ if __name__ == "__main__":
         default=12,
         help="Number of renders to save of the object.",
     )
+    parser.add_argument(
+        "--mode", 
+        type=str, 
+        required=True, 
+        choices=["motions", "blendernerf"], 
+        help="Mode to specify the rendering process. 'motions' for animation frames, 'blendernerf' for BlenderNeRF dataset.",
+    )
     argv = sys.argv[sys.argv.index("--") + 1 :]
     args = parser.parse_args(argv)
 
@@ -997,11 +1011,12 @@ if __name__ == "__main__":
         "cycles"
     ].preferences.compute_device_type = "CUDA"  # or "OPENCL"
 
-    # Render the images
+    # Render the images/dataset
     render_object(
         object_file=args.object_path,
         floor_texture_path=args.floor_texture_path,
         num_renders=args.num_renders,
         only_northern_hemisphere=args.only_northern_hemisphere,
         output_dir=args.output_dir,
+        mode=args.mode,
     )
