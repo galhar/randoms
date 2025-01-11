@@ -130,15 +130,19 @@ def randomize_camera(
     return camera
 
 
-def set_camera_on_circle(i, n_views) -> Tuple[bpy.types.Object, float]:
+def set_camera_on_circle(i, n_views, angle_shift=0) -> Tuple[bpy.types.Object, float]:
     angle_step = 360.0 / n_views
     radius = 1.25
     angle_deg = -180 + i * angle_step
-    angle_rad = math.radians(angle_deg)
+    angle_deg_shifted = angle_deg + angle_shift
+    angle_rad = math.radians(angle_deg_shifted)
     x = radius * math.cos(angle_rad)
     y = radius * math.sin(angle_rad)
     z = 0.25
 
+    # We return angle_deg and not angle_deg_shifted since the shift is used to rotate the object. E.g. the object
+    # we got faced to the right, a shift of 90 would rotate it to turn forward, but we want to later save the view as
+    # 0 not as 90.
     return setup_camera(x, y, z, 0.1), angle_deg
 
 
@@ -301,6 +305,22 @@ def reset_scene() -> None:
     # delete all the images
     for image in bpy.data.images:
         bpy.data.images.remove(image, do_unlink=True)
+
+
+def setup_object_config(object_file: str) -> dict:
+    object_config_path = ''.join(object_file.split('.')[:-1]) + '.json'
+    if not os.path.exists(object_config_path):
+        return dict()
+
+    with open(object_config_path, 'r') as f:
+        object_config = json.loads(f.read())
+    print('Loaded object configuration:', object_config)
+
+    scene.frame_start = object_config.get("frame_start", scene.frame_start)
+    scene.frame_end = object_config.get("frame_end", scene.frame_end)
+    scene.frame_step = object_config.get("frame_step", scene.frame_step)
+
+    return object_config
 
 
 def load_object(object_path: str) -> None:
@@ -877,15 +897,17 @@ def render_object(
     randomize_lighting()
 
     if mode == "motions":
+        obj_config = setup_object_config(object_file)
+
         # render animation frames
         for i in range(num_renders):
-            camera, view_angle = set_camera_on_circle(i, num_renders)
+            camera, view_angle = set_camera_on_circle(i, num_renders, obj_config.get('rotate_by', 0))
             view_dir = f"{view_angle:.2f}"
             os.makedirs(os.path.join(output_dir, view_dir), exist_ok=True)
             cur_output_dir = os.path.join(output_dir, view_dir)
     
             prev_states = None
-            for frame in range(scene.frame_start, scene.frame_end + 1):
+            for frame in range(scene.frame_start, scene.frame_end + 1, scene.frame_step):
                 cur_states = get_states_in_frame(scene, frame)
                 if cur_states == prev_states:
                     # recognize animation stopped
