@@ -777,10 +777,14 @@ def get_states_in_frame(scene, frame):
         # Check armature-based animations
         if obj.type == "ARMATURE" and obj.pose is not None:
             for bone in obj.pose.bones:
-                bone_state = (
-                    bone.matrix.copy()  # Bone transformation matrix
-                )
+                bone_state = bone.matrix.copy()  # Bone transformation matrix
                 obj_states.append((f"{obj.name}.{bone.name}", bone_state))
+
+        # Check Shape Key animations
+        if obj.data is not None and hasattr(obj.data, "shape_keys") and obj.data.shape_keys is not None:
+            for key_block in obj.data.shape_keys.key_blocks:
+                state = key_block.value  # Value of the shape key at this frame
+                obj_states.append((f"{obj.name}.{key_block.name}", state))
 
     return obj_states
 

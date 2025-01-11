@@ -50,23 +50,28 @@ if __name__ == "__main__":
         os.makedirs(output_dir, exist_ok=True)
 
         # Construct the blender command with dynamically populated paths
-        args = f"--object_path '{obj_path}' --floor_texture_path '{args.floor_texture_path}' --num_renders {n_views} --output_dir '{output_dir}'"# --engine CYCLES"
-        command = f"/snap/blender/current/blender --background --python blender_script.py -- {args}"
+        blender_args = f"--object_path '{obj_path}' --num_renders {n_views} --output_dir '{output_dir}'"# --engine CYCLES"
+        if args.floor_texture_path:
+            blender_args += f" --floor_texture_path '{args.floor_texture_path}'"
+        command = f"/snap/blender/current/blender --background --python blender_script.py -- {blender_args}"
         full_command = f"export DISPLAY=:0.{gpu_i} && {command}"
 
         # Render each object, capturing output
         # TODO: continue debug why the dino get an animation only on its first frame (same happened a lot in the animals) then re-render the animals and human again, to have it for tomorrow
         print(datetime.now())
         print(full_command)
-        res = subprocess.run(
-            ["bash", "-c", full_command],
-            timeout=40 * 60,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        print(res.stdout.decode("utf-8"))
-        
+        try:
+            res = subprocess.run(
+                ["bash", "-c", full_command],
+                timeout=40 * 60,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            print(res.stdout.decode("utf-8"))
+        except subprocess.TimeoutExpired:
+            print('Timeout, continue to next one...')
+
         # Create GIFs for each view angle directory
         for view_dir in os.listdir(output_dir):
             view_dir_path = os.path.join(output_dir, view_dir)
