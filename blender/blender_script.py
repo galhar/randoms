@@ -130,9 +130,8 @@ def randomize_camera(
     return camera
 
 
-def set_camera_on_circle(i, n_views, angle_shift=0) -> Tuple[bpy.types.Object, float]:
+def set_camera_on_circle(i, n_views, angle_shift=0, radius=1.4) -> Tuple[bpy.types.Object, float]:
     angle_step = 360.0 / n_views
-    radius = 1.25
     angle_deg = -180 + i * angle_step
     angle_deg_shifted = angle_deg + angle_shift
     angle_rad = math.radians(angle_deg_shifted)
@@ -795,6 +794,9 @@ def get_states_in_frame(scene, frame):
                 obj.location.copy(),
                 obj.rotation_euler.copy(),
                 obj.scale.copy(),
+                obj.matrix_world.translation.copy(),  # Get world-space location
+                obj.matrix_world.to_euler(),  # Get world-space rotation
+                obj.matrix_world.to_scale(),  # Get world-space scale
             )
             obj_states.append((obj.name, state))
 
@@ -903,7 +905,7 @@ def render_object(
 
         # render animation frames
         for i in range(num_renders):
-            camera, view_angle = set_camera_on_circle(i, num_renders, obj_config.get('rotate_by', 0))
+            camera, view_angle = set_camera_on_circle(i, num_renders, obj_config.get('rotate_by', 0), obj_config.get('camera_radius', 1.4))
             view_dir = f"{view_angle:.2f}"
             os.makedirs(os.path.join(output_dir, view_dir), exist_ok=True)
             cur_output_dir = os.path.join(output_dir, view_dir)
