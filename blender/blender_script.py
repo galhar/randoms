@@ -476,7 +476,7 @@ def delete_invisible_objects() -> None:
         bpy.data.collections.remove(col)
 
 
-def normalize_scene() -> None:
+def normalize_scene() -> float:
     """Normalizes the scene by scaling and translating it to fit in a unit cube centered
     at the origin.
 
@@ -486,7 +486,7 @@ def normalize_scene() -> None:
     https://github.com/openai/shap-e/pull/60).
 
     Returns:
-        None
+        legs_position
     """
     if len(list(get_scene_root_objects())) > 1:
         # create an empty object to be used as a parent for all root objects
@@ -513,6 +513,8 @@ def normalize_scene() -> None:
 
     # unparent the camera
     bpy.data.objects["Camera"].parent = None
+    legs_position = bbox_min[2] + offset[2] # z coordinate of bbox min
+    return legs_position
 
 
 def delete_missing_textures() -> Dict[str, Any]:
@@ -889,9 +891,9 @@ def render_object(
         json.dump(metadata, f, sort_keys=True, indent=2)
 
     # normalize the scene
-    normalize_scene()
+    legs_position = normalize_scene()
     if floor_texture_path is not None:
-        add_floor_plane(texture_path=floor_texture_path)
+        add_floor_plane(texture_path=floor_texture_path, target_z=legs_position)
 
     # randomize the lighting
     randomize_lighting()
