@@ -814,6 +814,10 @@ def get_states_in_frame(scene, frame):
 
     return obj_states
 
+def delete_animation():
+    for obj in scene.objects:
+        if obj.animation_data is not None:
+            obj.animation_data_clear()
 
 
 def render_object(
@@ -937,6 +941,8 @@ def render_object(
             # There is some weird phenomena in which the save_path is empty in the first time I try to run it even if I set its value before, then I can set its value and run again and it works..
             # The RuntimeError we intend to catch here - "Error: Save path cannot be empty!"
             pass
+
+        delete_animation()
         bpy.context.scene.save_path = output_dir  # Replace with your desired path
         bpy.context.scene.sphere_radius = 2.5  # Replace with your desired value
         scene.splats = True
