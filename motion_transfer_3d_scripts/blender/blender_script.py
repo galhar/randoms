@@ -946,6 +946,15 @@ def render_object(
         bpy.context.scene.save_path = output_dir  # Replace with your desired path
         bpy.context.scene.sphere_radius = 2.5  # Replace with your desired value
         scene.splats = True
+
+        # for obj in bpy.data.objects:
+        #     if obj.type == 'LIGHT':
+        #         bpy.data.objects.remove(obj, do_unlink=True)
+
+        scene.render.resolution_x = 1500
+        scene.render.resolution_y = 1500
+        # scene.view_settings.exposure = 4
+
         bpy.ops.object.camera_on_sphere()
 
 
