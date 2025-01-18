@@ -103,7 +103,7 @@ if __name__ == "__main__":
                 for png in png_files:
                     img = imageio.imread(png)
                     if img.shape[-1] == 4:  # Check if the image has an alpha channel
-                        background = np.zeros(img.shape[:2] + (3,), dtype=img.dtype)  # Create a black background
+                        background = np.ones(img.shape[:2] + (3,), dtype=img.dtype) * 255  # Create a white background
                         alpha = img[:, :, 3] / 255.0
                         for channel in range(3):  # Blend each color channel
                             background[:, :, channel] = (
@@ -112,5 +112,9 @@ if __name__ == "__main__":
                         img = background.astype(img.dtype)
                     frames.append(img)
                 imageio.imwrite(gif_path, frames, loop=0, duration=0.1)
+                
+                # Save the animation as an MP4 file
+                mp4_path = os.path.join(output_dir, f"{view_dir}.mp4")
+                imageio.imwrite(mp4_path, frames, fps=10)
 
 
