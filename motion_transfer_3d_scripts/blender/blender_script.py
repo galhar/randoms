@@ -130,7 +130,7 @@ def randomize_camera(
     return camera
 
 
-def set_camera_on_circle(i, n_views, angle_shift=0, radius=1.4) -> Tuple[bpy.types.Object, float]:
+def set_camera_on_circle(i, n_views, angle_shift=0, radius=1.6) -> Tuple[bpy.types.Object, float]:
     angle_step = 360.0 / n_views
     angle_deg = -180 + i * angle_step
     angle_deg_shifted = angle_deg + angle_shift
@@ -905,11 +905,13 @@ def render_object(
     randomize_lighting()
 
     if mode == "motions":
+        scene.render.resolution_x = 1024
+        scene.render.resolution_y = 512
         obj_config = setup_object_config(object_file)
 
         # render animation frames
         for i in range(num_renders):
-            camera, view_angle = set_camera_on_circle(i, num_renders, obj_config.get('rotate_by', 0), obj_config.get('camera_radius', 1.4))
+            camera, view_angle = set_camera_on_circle(i, num_renders, obj_config.get('rotate_by', 0), obj_config.get('camera_radius_add', 0) + 2.4)
             view_dir = f"{view_angle:.2f}"
             os.makedirs(os.path.join(output_dir, view_dir), exist_ok=True)
             cur_output_dir = os.path.join(output_dir, view_dir)

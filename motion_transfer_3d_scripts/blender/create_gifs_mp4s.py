@@ -33,7 +33,7 @@ def create_gif_and_mp4(root_directory):
             continue
 
         # Sort PNG files for consistent ordering
-        png_files.sort()
+        png_files.sort(key=lambda x: int(os.path.splitext(x)[0]))
         images = []
 
         for png_file in png_files:
