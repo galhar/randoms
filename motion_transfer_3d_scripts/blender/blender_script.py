@@ -898,8 +898,6 @@ def render_object(
 
     # normalize the scene
     legs_position = normalize_scene()
-    if floor_texture_path is not None:
-        add_floor_plane(texture_path=floor_texture_path, target_z=legs_position)
 
     # randomize the lighting
     randomize_lighting()
@@ -907,15 +905,33 @@ def render_object(
     if mode == "motions":
         scene.render.resolution_x = 1024
         scene.render.resolution_y = 512
+        default_camera_radius = 2.4
         obj_config = setup_object_config(object_file)
+        camera_radius = obj_config.get('camera_radius_add', 0) + 2.4
+        rotate_by = obj_config.get('rotate_by', 0)
 
-        # render animation frames
+        # Create a masks directory inside output_dir
+        masks_dir = os.path.join(output_dir, "masks")
+        os.makedirs(masks_dir, exist_ok=True)
+
+        # Render first frame without floor per angle
         for i in range(num_renders):
-            camera, view_angle = set_camera_on_circle(i, num_renders, obj_config.get('rotate_by', 0), obj_config.get('camera_radius_add', 0) + 2.4)
+            camera, view_angle = set_camera_on_circle(i, num_renders, rotate_by, camera_radius)
+            scene.frame_set(scene.frame_start)
+            scene.render.filepath = os.path.join(masks_dir, f"{view_angle:.2f}.png")
+            bpy.ops.render.render(write_still=True)
+
+        # Now add the floor
+        if floor_texture_path is not None:
+            add_floor_plane(texture_path=floor_texture_path, target_z=legs_position)
+
+        # Render animation frames with the floor
+        for i in range(num_renders):
+            camera, view_angle = set_camera_on_circle(i, num_renders, rotate_by, camera_radius)
             view_dir = f"{view_angle:.2f}"
             os.makedirs(os.path.join(output_dir, view_dir), exist_ok=True)
             cur_output_dir = os.path.join(output_dir, view_dir)
-    
+
             prev_states = None
             for frame in range(scene.frame_start, scene.frame_end + 1, scene.frame_step):
                 cur_states = get_states_in_frame(scene, frame)
@@ -923,15 +939,15 @@ def render_object(
                     # recognize animation stopped
                     break
                 prev_states = cur_states
-    
+
                 scene.frame_set(frame)
                 render_path = os.path.join(cur_output_dir, f"{frame - 1}.png")
                 scene.render.filepath = render_path
                 bpy.ops.render.render(write_still=True)
-    
+
             rt_matrix = get_3x4_RT_matrix_from_blender(camera)
-            rt_matrix_path = os.path.join(cur_output_dir, f"rt_matrix.npy")
-            np.save(rt_matrix_path, rt_matrix)
+            np.save(os.path.join(cur_output_dir, "rt_matrix.npy"), rt_matrix)
+
 
     elif mode == "blendernerf":
         addon_utils.enable("bl_ext.user_default.BlenderNeRF")
