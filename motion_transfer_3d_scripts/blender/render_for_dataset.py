@@ -88,7 +88,7 @@ if __name__ == "__main__":
                 # Collect all PNG files in the view directory, sorted by the numeric value in their filename
                 png_files = sorted(
                     [os.path.join(view_dir_path, f) for f in os.listdir(view_dir_path) if f.endswith(".png")],
-                    key=lambda x: int(os.path.splitext(os.path.basename(x))[0])
+                    key=lambda x: float(os.path.splitext(os.path.basename(x))[0])
                 )
         
                 # Skip if no PNG files found

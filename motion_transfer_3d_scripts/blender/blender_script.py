@@ -543,17 +543,18 @@ def delete_missing_textures() -> Dict[str, Any]:
 
                         if not os.path.exists(file_path):
                             # Find the connected Principled BSDF node
-                            connected_node = node.outputs[0].links[0].to_node
+                            if len(node.outputs[0].links) > 0:
+                                connected_node = node.outputs[0].links[0].to_node
 
-                            if connected_node.type == "BSDF_PRINCIPLED":
-                                if file_path not in file_path_to_color:
-                                    # Set a random color for the unique missing file path
-                                    random_color = [random.random() for _ in range(3)]
-                                    file_path_to_color[file_path] = random_color + [1]
+                                if connected_node.type == "BSDF_PRINCIPLED":
+                                    if file_path not in file_path_to_color:
+                                        # Set a random color for the unique missing file path
+                                        random_color = [random.random() for _ in range(3)]
+                                        file_path_to_color[file_path] = random_color + [1]
 
-                                connected_node.inputs[
-                                    "Base Color"
-                                ].default_value = file_path_to_color[file_path]
+                                    connected_node.inputs[
+                                        "Base Color"
+                                    ].default_value = file_path_to_color[file_path]
 
                             # Delete the TEX_IMAGE node
                             material.node_tree.nodes.remove(node)
@@ -875,7 +876,7 @@ def render_object(
     metadata = metadata_extractor.get_metadata()
 
     # delete all objects that are not meshes
-    if object_file.lower().endswith(".usdz"):
+    if object_file.lower().endswith(".usdz") or object_file.lower().endswith(".fbx"):
         # don't delete missing textures on usdz files, lots of them are embedded
         missing_textures = None
     else:
@@ -965,13 +966,14 @@ def render_object(
         bpy.context.scene.sphere_radius = 2.5  # Replace with your desired value
         scene.splats = True
 
-        # for obj in bpy.data.objects:
-        #     if obj.type == 'LIGHT':
-        #         bpy.data.objects.remove(obj, do_unlink=True)
+        for obj in bpy.data.objects:
+            if obj.type == 'LIGHT':
+                bpy.data.objects.remove(obj, do_unlink=True)
 
         scene.render.resolution_x = 1500
         scene.render.resolution_y = 1500
         # scene.view_settings.exposure = 4
+        apply_hdri('../assets/citrus_orchard_road_1k.hdr')
 
         bpy.ops.object.camera_on_sphere()
 
@@ -994,6 +996,33 @@ def add_floor_plane(texture_path, size=10, target_z=-1):
     floor_plane.data.materials.append(material)
     print(f"Floor plane added: size={size}, target_z={target_z}, texture={texture_path}")
 
+def apply_hdri(envmap_path):
+    scene = bpy.context.scene
+    envmap_path = envmap_path
+    world_node_tree = scene.world.node_tree
+    world_node_tree.nodes.clear()
+
+    image = bpy.data.images.load(envmap_path)
+    env_texture_node = world_node_tree.nodes.new(type="ShaderNodeTexEnvironment")
+    env_texture_node.image = image
+
+    background_node = world_node_tree.nodes.new(type="ShaderNodeBackground")
+    envmap_strength = random.uniform(1.0, 1.0)  # previously (0.5, 1.0) - but sometimes too dark
+    background_node.inputs["Strength"].default_value = envmap_strength
+
+    world_output_node = world_node_tree.nodes.new(type="ShaderNodeOutputWorld")
+
+    world_node_tree.links.new(env_texture_node.outputs["Color"], background_node.inputs["Color"])
+    world_node_tree.links.new(background_node.outputs["Background"], world_output_node.inputs["Surface"])
+
+    texture_coord_node = world_node_tree.nodes.new(type="ShaderNodeTexCoord")
+    mapping_node = world_node_tree.nodes.new(type="ShaderNodeMapping")
+
+    envmap_rotation = (0, 0, random.uniform(0, 2 * np.pi))
+    mapping_node.inputs['Rotation'].default_value = envmap_rotation
+
+    world_node_tree.links.new(texture_coord_node.outputs["Generated"], mapping_node.inputs["Vector"])
+    world_node_tree.links.new(mapping_node.outputs["Vector"], env_texture_node.inputs["Vector"])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
