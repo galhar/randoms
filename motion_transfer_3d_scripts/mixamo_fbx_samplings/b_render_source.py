@@ -1,12 +1,21 @@
 import bpy
 import os
+import sys
 import math
 import mathutils
 import json
+
+# Required for external pip installed packages, as they arent installed by default into blender python site-packages rather into the user's site-packages. And trying to install into the correct blender site-packages results in READ ONLY ERRORS.
+user_site_packages = os.path.expanduser("~/.local/lib/python3.11/site-packages")
+if user_site_packages not in sys.path:
+    sys.path.insert(0, user_site_packages)
+
 import imageio  # New import for creating videos
 from PIL import Image, ImageDraw  # For adding white background to transparent images
 import tempfile  # Import for temporary file handling
 import numpy as np
+import argparse
+
 
 # Function to load an FBX file
 def load_fbx(filepath):
@@ -35,8 +44,13 @@ def standardize_bone_names(source_armature, target_armature):
 # Function to transfer animation from one armature to another
 def transfer_animation(source_armature, target_armature):
     print("Transferring animation...")
-    target_armature.animation_data_create()
-    target_armature.animation_data.action = source_armature.animation_data.action
+
+    bpy.context.view_layer.objects.active = source_armature
+    target_armature.select_set(True)
+    bpy.ops.object.make_links_data(type='ANIMATION')
+
+    # target_armature.animation_data_create()
+    # target_armature.animation_data.action = source_armature.animation_data.action
     print(f"Animation transferred from '{source_armature.name}' to '{target_armature.name}'.")
 
 # Function to set the frame range
@@ -94,7 +108,7 @@ def render_animation(start_frame, end_frame):
     print("Rendering animation...")
 
     jj = 1
-    frames_to_render = np.linspace(start_frame, end_frame, 14).astype(int)
+    frames_to_render = np.linspace(start_frame, end_frame, num=frames_n).astype(int)
     print(frames_to_render)
     base_path = bpy.context.scene.render.filepath  # The folder you originally set
 
@@ -324,7 +338,8 @@ def main(animation_fbx, object_fbx, output_path, num_angles):
     object_armature = load_fbx(object_fbx)
 
     # Step 3: Standardize bone names
-    standardize_bone_names(animation_armature, object_armature)
+    # TODO: This should be a redundant step, as the bone names are already standardized in the FBX files. I kept it since the reference code had it, but it works without it.
+    # standardize_bone_names(animation_armature, object_armature)
 
     # Step 4: Transfer the animation
     transfer_animation(animation_armature, object_armature)
@@ -332,8 +347,8 @@ def main(animation_fbx, object_fbx, output_path, num_angles):
 #    align_hips_to_ground(object_armature)
     align_legs_to_specific(object_armature)
     
-    texture_path = "/home/yarinbekor/Desktop/THESIS/MT_Data/final_dataset/Supplementary/laminate_floor_03_diff_4k.jpg"
-    add_floor_plane(texture_path=texture_path)
+    # texture_path = "/home/yarinbekor/Desktop/THESIS/MT_Data/final_dataset/Supplementary/laminate_floor_03_diff_4k.jpg"
+    add_floor_plane()  # Use default material instead of texture
 
     # Step 5: Set the frame range
     start_frame = motion_parameters[animation_name]['starting_frame']
@@ -390,46 +405,59 @@ def main(animation_fbx, object_fbx, output_path, num_angles):
 
 # Run the main function
 if __name__ == "__main__":
-    # Paths
-    animations_dir = "/home/yarinbekor/Desktop/THESIS/MT_Data/final_dataset/Motions"
-    objects_dir = "/home/yarinbekor/Desktop/THESIS/MT_Data/final_dataset/Objects"
-    output_base_path = "/home/yarinbekor/Desktop/THESIS/MT_Data/final_dataset/Renders/Source"
-    motions_json_file = "/home/yarinbekor/Desktop/THESIS/MT_Data/final_dataset/Motions/zzzproperties.json"
-    object_json_file = "/home/yarinbekor/Desktop/THESIS/MT_Data/final_dataset/Objects/zzzproperties.json"
-
-    # Desired objects
-#    desired_objects = ["Aj", "Amy", "castle_guatd_01", "Crypto", "Knight", "Michelle", "Mousey", "Ortiz", "SportyGranny"]
-    desired_objects = ["Brian", "Megan"]
-#    desired_objects = ["Ortiz"]
-    num_angles = 16
-#    num_angles = 4
+    # Parse command line arguments
+    argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
+    parser = argparse.ArgumentParser(description="Render motion transfer videos")
+    parser.add_argument("--animation_fbx", type=str, required=False, help="Path to animation FBX file", default="/home/gal/datasets/experiments/motion_transfer_3d/MixamoData/Yarin_raw/Motions/Clapping.fbx")
+    parser.add_argument("--object_fbx", type=str, required=False, help="Path to target object FBX file", default="/home/gal/datasets/experiments/motion_transfer_3d/MixamoData/Yarin_raw/Objects/Eve.fbx")
+    parser.add_argument("--motion_name", type=str, required=False, help="Name of the motion (for JSON lookup)",default="Clapping")
+    parser.add_argument("--frames_n", type=int, default=14, help="Number of frames to sample")
+    parser.add_argument("--output_path", type=str, required=False, help="Output directory path", default='./test_renders/debug')
+    parser.add_argument("--frames_json", type=str, required=False, help="Path to frames JSON file", default='/home/gal/datasets/experiments/motion_transfer_3d/MixamoData/Yarin_raw/frames_cut_per_motion.json')
     
-    print("Loading json!")
-    # Load parameters from the JSON file
-    with open(object_json_file, 'r') as file:
-        object_parameters = json.load(file)
-        
-    with open(motions_json_file, 'r') as file:
+    
+    args = parser.parse_args(argv)
+    
+    # Set global variables
+    animation_fbx = args.animation_fbx
+    object_fbx = args.object_fbx
+    animation_name = args.motion_name
+    frames_n = args.frames_n
+    output_path = args.output_path
+    
+    # Load motion parameters from JSON
+    if args.frames_json:
+        frames_json_path = args.frames_json
+    else:
+        # Try to find frames JSON in the same directory as the motion file
+        motion_dir = os.path.dirname(args.animation_fbx)
+        base_dir = os.path.dirname(motion_dir)
+        frames_json_path = os.path.join(base_dir, "frames_cut_per_motion.json")
+    
+    print(f"Loading motion parameters from: {frames_json_path}")
+    with open(frames_json_path, 'r') as file:
         motion_parameters = json.load(file)
     
-
-    # Render settings
+    # Verify motion exists in JSON
+    if animation_name not in motion_parameters:
+        raise ValueError(f"Motion '{animation_name}' not found in frames JSON")
+    
+    # Set render parameters
+    num_angles = 16
     resolution_x = 520
     resolution_y = 520
     fps = 7
+    radius = 8  # default radius
+    exposure = 8  # default exposure
     
-    for object_file in os.listdir(objects_dir):
-        object_name = os.path.splitext(object_file)[0]
-        if object_file.endswith(".fbx") and object_name in desired_objects:
-            print(os.listdir(animations_dir))
-            for animation_file in [os.listdir(animations_dir)]:
-                if animation_file.endswith(".fbx"):
-                    object_path = os.path.join(objects_dir, object_file)
-                    animation_path = os.path.join(animations_dir, animation_file)
-                    animation_name = os.path.splitext(animation_file)[0]
-                    radius = object_parameters[object_name].get('radius', 8)
-                    exposure = object_parameters[object_name].get('exposure', 8)
-                    start_frame = motion_parameters[animation_name]['starting_frame']
-                    end_Frame = motion_parameters[animation_name]['end_frame']
-                    video_output_path = os.path.join(output_base_path, f"{object_name}_{animation_name}")
-                    main(animation_path, object_path, video_output_path, num_angles)
+    # Output path setup
+    output_base_path = output_path
+    object_name = os.path.splitext(os.path.basename(object_fbx))[0]
+    
+    print(f"Processing: {animation_name} -> {object_name}")
+    print(f"Frames: {motion_parameters[animation_name]['starting_frame']} to {motion_parameters[animation_name]['end_frame']}")
+    print(f"Sampling {frames_n} frames")
+    print(f"Output: {output_base_path}")
+    
+    # Run the main function
+    main(animation_fbx, object_fbx, output_base_path, num_angles)
