@@ -93,54 +93,72 @@ def create_animation_gif(mesh_dir, output_name, interval=400):
 
 def apply_fps_sampling_and_prepare_gif(mesh_nodes_dir, output_subdir, target_name, motion_name):
     """
-    Apply FPS sampling to downsample point clouds and prepare directory for GIF creation.
+    Apply mesh surface sampling to generate uniform point clouds and prepare directory for GIF creation.
     
-    Note: FPS sampling is done here (not in blender script) because blender's python 
-    environment has minimal external packages and doesn't include fpsample.
+    Note: Mesh surface sampling is done here (not in blender script) because blender's python 
+    environment has minimal external packages and doesn't include point_cloud_utils.
+    
+    Uses consistent point sampling: samples points from the first frame and interpolates 
+    corresponding positions on all other frames for temporal consistency.
     
     Returns:
         str: Path to directory containing data for GIF creation (either sampled or original)
     """
     try:
-        import fpsample
+        import point_cloud_utils as pcu
         import numpy as np
         import glob
         import shutil
+        
         points_to_sample = 2048
         
-        print(f"Applying FPS sampling to reduce points to {points_to_sample}...")
+        print(f"Applying consistent mesh surface sampling to generate {points_to_sample} points...")
         
-        # Get all vertex files
+        # Get all vertex and face files
         vertex_files = sorted(glob.glob(os.path.join(mesh_nodes_dir, "frame_*_vertices.npy")))
+        face_files = sorted(glob.glob(os.path.join(mesh_nodes_dir, "frame_*_faces.npy")))
         
-        if not vertex_files:
-            print("No vertex files found for FPS sampling")
+        if not vertex_files or not face_files:
+            print("No vertex or face files found for mesh surface sampling")
             return mesh_nodes_dir
         
-        # Load first frame to determine sampling indices
+        if len(vertex_files) != len(face_files):
+            print("Mismatch between number of vertex and face files")
+            return mesh_nodes_dir
+        
+        # Load first frame to determine consistent sampling points
         first_frame_vertices = np.load(vertex_files[0])
-        print(f"Original vertices count: {len(first_frame_vertices)}")
+        first_frame_faces = np.load(face_files[0])
+        print(f"Original mesh: {len(first_frame_vertices)} vertices, {len(first_frame_faces)} faces")
         
-        # Apply FPS sampling to get indices for 1024 points
-        if len(first_frame_vertices) <= points_to_sample:
-            print(f"Mesh has fewer than 1024 vertices, using original mesh for GIF")
-            return mesh_nodes_dir
+        # Sample points from the first frame to get consistent barycentric coordinates
+        print("Generating consistent sampling pattern from first frame...")
+        fid, bc = pcu.sample_mesh_random(first_frame_vertices, first_frame_faces, points_to_sample)
+        print(f"Sampled {len(fid)} face indices with barycentric coordinates")
         
-        fps_samples_idx = fpsample.fps_sampling(first_frame_vertices, points_to_sample)
-        print(f"FPS sampling selected {len(fps_samples_idx)} points")
-        
-        # Apply same indices to all frames and save sampled versions
+        # Create sampled directory
         sampled_dir = os.path.join(output_subdir, "mesh_nodes_sampled")
         os.makedirs(sampled_dir, exist_ok=True)
         
-        for i, vertex_file in enumerate(vertex_files):
-            vertices = np.load(vertex_file)
-            sampled_vertices = vertices[fps_samples_idx]
+        # Apply the same barycentric coordinates to all frames for consistency
+        print("Applying consistent sampling to all frames...")
+        for i, (vertex_file, face_file) in enumerate(zip(vertex_files, face_files)):
+            vertices = np.load(vertex_file)  # [n, 3]
+            faces = np.load(face_file)       # [m, 3]
             
-            # Save sampled vertices
+            # Use the same face indices and barycentric coordinates from first frame
+            # This ensures the same surface points are tracked across all frames
+            sampled_positions = pcu.interpolate_barycentric_coords(faces, fid, bc, vertices)
+            
+            # Save sampled positions
             sampled_filename = f"frame_{i:04d}_vertices.npy"
             sampled_path = os.path.join(sampled_dir, sampled_filename)
-            np.save(sampled_path, sampled_vertices)
+            np.save(sampled_path, sampled_positions)
+            
+            if i == 0:
+                print(f"Frame {i}: Sampled {len(sampled_positions)} consistent points")
+            elif i % 5 == 0:  # Print progress every 5 frames
+                print(f"Frame {i}: Applied consistent sampling")
         
         # Copy metadata to sampled directory
         metadata_src = os.path.join(mesh_nodes_dir, "metadata.json")
@@ -152,19 +170,21 @@ def apply_fps_sampling_and_prepare_gif(mesh_nodes_dir, output_subdir, target_nam
             with open(metadata_dst, 'r') as f:
                 metadata = json.load(f)
             metadata['num_vertices'] = points_to_sample
-            metadata['fps_sampled'] = True
+            metadata['mesh_surface_sampled'] = True
+            metadata['consistent_sampling'] = True
             metadata['original_vertices'] = len(first_frame_vertices)
+            metadata['original_faces'] = len(first_frame_faces)
             with open(metadata_dst, 'w') as f:
                 json.dump(metadata, f, indent=2)
         
-        print(f"Using FPS sampled points ({points_to_sample}) for GIF creation")
+        print(f"Using consistent mesh surface sampled points ({points_to_sample}) for GIF creation")
         return sampled_dir
         
     except ImportError:
-        print("Warning: fpsample not available, using original mesh for GIF creation")
+        print("Warning: point_cloud_utils not available, using original mesh for GIF creation")
         return mesh_nodes_dir
     except Exception as e:
-        print(f"Error during FPS sampling: {e}")
+        print(f"Error during mesh surface sampling: {e}")
         print("Using original mesh for GIF creation")
         return mesh_nodes_dir
 
@@ -290,7 +310,7 @@ if __name__ == "__main__":
                         print(f"Mesh nodes directory not found, skipping GIF creation for {target_name}_{motion_name}")
                         continue
                     
-                    # Apply FPS sampling to downsample point clouds before GIF creation
+                    # Apply mesh surface sampling to generate uniform point clouds before GIF creation
                     gif_input_dir = apply_fps_sampling_and_prepare_gif(mesh_nodes_dir, output_subdir, target_name, motion_name)
                     
                     # Create GIF using the appropriate directory (sampled or original)

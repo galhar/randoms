@@ -442,7 +442,7 @@ def main(animation_fbx, object_fbx, output_path, num_angles):
         faces_path = os.path.join(mesh_output_dir, faces_filename)
         
         np.save(vertices_path, vertices_array)
-        # np.save(faces_path, faces_array) # redundant, as the faces are not used for anything
+        np.save(faces_path, faces_array) # redundant, as the faces are not used for anything
         
         print(f"Saved {len(vertices_array)} vertices to {vertices_path}")
         print(f"Saved {len(faces_array)} faces to {faces_path}")
