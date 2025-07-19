@@ -4,6 +4,170 @@ import argparse
 import json
 from datetime import datetime
 
+def create_animation_gif(mesh_dir, output_name, interval=400):
+    """Create an animated GIF from extracted mesh data"""
+    try:
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        from matplotlib.animation import FuncAnimation, PillowWriter
+        import glob
+    except ImportError as e:
+        print(f"Warning: Could not import required libraries for GIF creation: {e}")
+        print("Skipping GIF creation...")
+        return False
+    
+    # Load metadata
+    metadata_file = os.path.join(mesh_dir, "metadata.json")
+    if os.path.exists(metadata_file):
+        with open(metadata_file, 'r') as f:
+            metadata = json.load(f)
+        object_name = metadata['object_name']
+        motion_name = metadata['motion_name']
+    else:
+        object_name = "unknown"
+        motion_name = "unknown"
+    
+    # Get all frame files
+    frame_files = sorted(glob.glob(os.path.join(mesh_dir, "frame_*_vertices.npy")))
+    num_frames = len(frame_files)
+    
+    if num_frames == 0:
+        print("No frame files found for GIF creation!")
+        return False
+    
+    print(f"Creating GIF animation: {object_name} - {motion_name} ({num_frames} frames)")
+    
+    # Load all vertices and calculate bounds
+    all_vertices = []
+    for frame_file in frame_files:
+        vertices = np.load(frame_file)
+        all_vertices.append(vertices)
+    
+    all_vertices_stacked = np.vstack(all_vertices)
+    x_min, x_max = all_vertices_stacked[:, 0].min(), all_vertices_stacked[:, 0].max()
+    y_min, y_max = all_vertices_stacked[:, 1].min(), all_vertices_stacked[:, 1].max()
+    z_min, z_max = all_vertices_stacked[:, 2].min(), all_vertices_stacked[:, 2].max()
+    
+    # Create figure and axis
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    def update(frame_idx):
+        if frame_idx < len(all_vertices):
+            vertices = all_vertices[frame_idx]
+            ax.clear()
+            ax.scatter(vertices[:, 0], vertices[:, 1], vertices[:, 2], 
+                      c=vertices[:, 2], cmap='viridis', s=0.5, alpha=0.7)
+            
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_min, y_max)
+            ax.set_zlim(z_min, z_max)
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+            ax.view_init(elev=15, azim=45)
+            ax.set_title(f"{object_name} - {motion_name} - Frame {frame_idx}")
+    
+    # Create animation
+    anim = FuncAnimation(fig, update, frames=num_frames, interval=interval, repeat=True)
+    
+    # Save as GIF
+    try:
+        writer = PillowWriter(fps=1000//interval)
+        anim.save(output_name, writer=writer)
+        print(f"GIF saved successfully: {output_name}")
+        plt.close()
+        return True
+    except Exception as e:
+        print(f"Error saving GIF: {e}")
+        try:
+            anim.save(output_name, writer='pillow', fps=1000//interval)
+            print(f"GIF saved successfully with alternative method: {output_name}")
+            plt.close()
+            return True
+        except Exception as e2:
+            print(f"Failed to save GIF: {e2}")
+            plt.close()
+            return False
+
+def apply_fps_sampling_and_prepare_gif(mesh_nodes_dir, output_subdir, target_name, motion_name):
+    """
+    Apply FPS sampling to downsample point clouds and prepare directory for GIF creation.
+    
+    Note: FPS sampling is done here (not in blender script) because blender's python 
+    environment has minimal external packages and doesn't include fpsample.
+    
+    Returns:
+        str: Path to directory containing data for GIF creation (either sampled or original)
+    """
+    try:
+        import fpsample
+        import numpy as np
+        import glob
+        import shutil
+        points_to_sample = 2048
+        
+        print(f"Applying FPS sampling to reduce points to {points_to_sample}...")
+        
+        # Get all vertex files
+        vertex_files = sorted(glob.glob(os.path.join(mesh_nodes_dir, "frame_*_vertices.npy")))
+        
+        if not vertex_files:
+            print("No vertex files found for FPS sampling")
+            return mesh_nodes_dir
+        
+        # Load first frame to determine sampling indices
+        first_frame_vertices = np.load(vertex_files[0])
+        print(f"Original vertices count: {len(first_frame_vertices)}")
+        
+        # Apply FPS sampling to get indices for 1024 points
+        if len(first_frame_vertices) <= points_to_sample:
+            print(f"Mesh has fewer than 1024 vertices, using original mesh for GIF")
+            return mesh_nodes_dir
+        
+        fps_samples_idx = fpsample.fps_sampling(first_frame_vertices, points_to_sample)
+        print(f"FPS sampling selected {len(fps_samples_idx)} points")
+        
+        # Apply same indices to all frames and save sampled versions
+        sampled_dir = os.path.join(output_subdir, "mesh_nodes_sampled")
+        os.makedirs(sampled_dir, exist_ok=True)
+        
+        for i, vertex_file in enumerate(vertex_files):
+            vertices = np.load(vertex_file)
+            sampled_vertices = vertices[fps_samples_idx]
+            
+            # Save sampled vertices
+            sampled_filename = f"frame_{i:04d}_vertices.npy"
+            sampled_path = os.path.join(sampled_dir, sampled_filename)
+            np.save(sampled_path, sampled_vertices)
+        
+        # Copy metadata to sampled directory
+        metadata_src = os.path.join(mesh_nodes_dir, "metadata.json")
+        metadata_dst = os.path.join(sampled_dir, "metadata.json")
+        if os.path.exists(metadata_src):
+            shutil.copy2(metadata_src, metadata_dst)
+            
+            # Update metadata with new vertex count
+            with open(metadata_dst, 'r') as f:
+                metadata = json.load(f)
+            metadata['num_vertices'] = points_to_sample
+            metadata['fps_sampled'] = True
+            metadata['original_vertices'] = len(first_frame_vertices)
+            with open(metadata_dst, 'w') as f:
+                json.dump(metadata, f, indent=2)
+        
+        print(f"Using FPS sampled points ({points_to_sample}) for GIF creation")
+        return sampled_dir
+        
+    except ImportError:
+        print("Warning: fpsample not available, using original mesh for GIF creation")
+        return mesh_nodes_dir
+    except Exception as e:
+        print(f"Error during FPS sampling: {e}")
+        print("Using original mesh for GIF creation")
+        return mesh_nodes_dir
+
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Render motion transfer videos for FBX files.")
@@ -36,6 +200,11 @@ if __name__ == "__main__":
         type=str,
         default="./renders",
         help="Base output directory for rendered videos (default: ./renders)"
+    )
+    parser.add_argument(
+        "--create_gif",
+        action="store_true",
+        help="Create animated GIF from extracted mesh data"
     )
     
     args = parser.parse_args()
@@ -102,7 +271,7 @@ if __name__ == "__main__":
             try:
                 res = subprocess.run(
                     ["bash", "-c", full_command],
-                    timeout=40 * 60,  # 40 minutes timeout
+                    timeout=10 * 60,  # 10 minutes timeout
                     check=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -112,7 +281,26 @@ if __name__ == "__main__":
                 
                 if res.returncode != 0:
                     print(f"Warning: Command failed with return code {res.returncode}")
+                    continue
+                
+                # Create GIF if requested and extraction was successful
+                if args.create_gif:
+                    mesh_nodes_dir = os.path.join(output_subdir, "mesh_nodes")
+                    if not os.path.exists(mesh_nodes_dir):
+                        print(f"Mesh nodes directory not found, skipping GIF creation for {target_name}_{motion_name}")
+                        continue
                     
+                    # Apply FPS sampling to downsample point clouds before GIF creation
+                    gif_input_dir = apply_fps_sampling_and_prepare_gif(mesh_nodes_dir, output_subdir, target_name, motion_name)
+                    
+                    # Create GIF using the appropriate directory (sampled or original)
+                    gif_filename = f"{target_name}_{motion_name}_animation.gif"
+                    gif_path = os.path.join(output_subdir, gif_filename)
+                    print(f"Creating GIF animation: {gif_filename}")
+                    success = create_animation_gif(gif_input_dir, gif_path, interval=400)
+                    if not success:
+                        print(f"Failed to create GIF for {target_name}_{motion_name}")
+                
             except subprocess.TimeoutExpired:
                 print('Timeout, continuing to next combination...')
                 

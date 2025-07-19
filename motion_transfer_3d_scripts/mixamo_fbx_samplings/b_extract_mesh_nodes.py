@@ -9,8 +9,11 @@ import json
 user_site_packages = os.path.expanduser("~/.local/lib/python3.11/site-packages")
 if user_site_packages not in sys.path:
     sys.path.insert(0, user_site_packages)
+try:
+    import imageio  # New import for creating videos
+except ImportError:
+    print("imageio is not installed. image saving will not work.")
 
-import imageio  # New import for creating videos
 from PIL import Image, ImageDraw  # For adding white background to transparent images
 import tempfile  # Import for temporary file handling
 import numpy as np
@@ -366,9 +369,10 @@ def main(animation_fbx, object_fbx, output_path, num_angles):
         print("Warning: No mesh objects found associated with the armature")
         return
     
-    # Use the first mesh object found
-    mesh_obj = mesh_objects[0]
-    print(f"Using mesh object: {mesh_obj.name}")
+    # Use ALL mesh objects found
+    print(f"Found {len(mesh_objects)} mesh objects associated with the armature:")
+    for i, mesh_obj in enumerate(mesh_objects):
+        print(f"  {i+1}. {mesh_obj.name}")
     
     # Create output directory for mesh data
     mesh_output_dir = os.path.join(output_path, "mesh_nodes")
@@ -388,30 +392,47 @@ def main(animation_fbx, object_fbx, output_path, num_angles):
         # Update the scene to apply animation
         bpy.context.view_layer.update()
         
-        # Get the mesh data with modifiers applied (animated pose)
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-        mesh_eval = mesh_obj.evaluated_get(depsgraph)
-        mesh_data = mesh_eval.to_mesh()
+        # Combine vertices and faces from all mesh objects
+        all_vertices_world = []
+        all_faces = []
+        vertex_offset = 0
         
-        # Extract vertex positions in world coordinates
-        vertices_world = []
-        for vertex in mesh_data.vertices:
-            world_pos = mesh_eval.matrix_world @ vertex.co
-            vertices_world.append([world_pos.x, world_pos.y, world_pos.z])
+        # Process each mesh object
+        for mesh_obj in mesh_objects:
+            # Get the mesh data with modifiers applied (animated pose)
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            mesh_eval = mesh_obj.evaluated_get(depsgraph)
+            mesh_data = mesh_eval.to_mesh()
+            
+            # Extract vertex positions in world coordinates
+            for vertex in mesh_data.vertices:
+                world_pos = mesh_eval.matrix_world @ vertex.co
+                all_vertices_world.append([world_pos.x, world_pos.y, world_pos.z])
+            
+            # Extract face indices (triangulated) with vertex offset
+            for face in mesh_data.polygons:
+                if len(face.vertices) == 3:
+                    all_faces.append([face.vertices[0] + vertex_offset, 
+                                    face.vertices[1] + vertex_offset, 
+                                    face.vertices[2] + vertex_offset])
+                elif len(face.vertices) == 4:
+                    # Convert quad to two triangles
+                    all_faces.append([face.vertices[0] + vertex_offset, 
+                                    face.vertices[1] + vertex_offset, 
+                                    face.vertices[2] + vertex_offset])
+                    all_faces.append([face.vertices[0] + vertex_offset, 
+                                    face.vertices[2] + vertex_offset, 
+                                    face.vertices[3] + vertex_offset])
+            
+            # Update vertex offset for next mesh
+            vertex_offset += len(mesh_data.vertices)
+            
+            # Clean up the temporary mesh
+            mesh_eval.to_mesh_clear()
         
-        vertices_array = np.array(vertices_world)
-        
-        # Extract face indices (triangulated)
-        faces = []
-        for face in mesh_data.polygons:
-            if len(face.vertices) == 3:
-                faces.append([face.vertices[0], face.vertices[1], face.vertices[2]])
-            elif len(face.vertices) == 4:
-                # Convert quad to two triangles
-                faces.append([face.vertices[0], face.vertices[1], face.vertices[2]])
-                faces.append([face.vertices[0], face.vertices[2], face.vertices[3]])
-        
-        faces_array = np.array(faces)
+        # Convert to numpy arrays
+        vertices_array = np.array(all_vertices_world)
+        faces_array = np.array(all_faces)
         
         # Save vertex positions and faces
         frame_filename = f"frame_{i:04d}_vertices.npy"
@@ -421,13 +442,10 @@ def main(animation_fbx, object_fbx, output_path, num_angles):
         faces_path = os.path.join(mesh_output_dir, faces_filename)
         
         np.save(vertices_path, vertices_array)
-        np.save(faces_path, faces_array)
+        # np.save(faces_path, faces_array) # redundant, as the faces are not used for anything
         
         print(f"Saved {len(vertices_array)} vertices to {vertices_path}")
         print(f"Saved {len(faces_array)} faces to {faces_path}")
-        
-        # Clean up the temporary mesh
-        mesh_eval.to_mesh_clear()
     
     # Save frame metadata
     metadata = {
