@@ -273,8 +273,9 @@ if __name__ == "__main__":
             target_name = os.path.splitext(target_file)[0]
             target_path = os.path.join(args.targets_dir, target_file)
             
-            # Create output directory for this combination
-            output_subdir = os.path.join(args.output_dir, f"{target_name}_{motion_name}")
+            # Create output directory for this combination - new structure: {Motion}/{Object}
+            motion_dir = os.path.join(args.output_dir, motion_name)
+            output_subdir = os.path.join(motion_dir, target_name)
             os.makedirs(output_subdir, exist_ok=True)
             
             # Construct blender command arguments
@@ -307,19 +308,19 @@ if __name__ == "__main__":
                 if args.create_gif:
                     mesh_nodes_dir = os.path.join(output_subdir, "mesh_nodes")
                     if not os.path.exists(mesh_nodes_dir):
-                        print(f"Mesh nodes directory not found, skipping GIF creation for {target_name}_{motion_name}")
+                        print(f"Mesh nodes directory not found, skipping GIF creation for {motion_name}/{target_name}")
                         continue
                     
                     # Apply mesh surface sampling to generate uniform point clouds before GIF creation
                     gif_input_dir = apply_fps_sampling_and_prepare_gif(mesh_nodes_dir, output_subdir, target_name, motion_name)
                     
                     # Create GIF using the appropriate directory (sampled or original)
-                    gif_filename = f"{target_name}_{motion_name}_animation.gif"
+                    gif_filename = f"{motion_name}_{target_name}_animation.gif"
                     gif_path = os.path.join(output_subdir, gif_filename)
                     print(f"Creating GIF animation: {gif_filename}")
                     success = create_animation_gif(gif_input_dir, gif_path, interval=400)
                     if not success:
-                        print(f"Failed to create GIF for {target_name}_{motion_name}")
+                        print(f"Failed to create GIF for {motion_name}/{target_name}")
                 
             except subprocess.TimeoutExpired:
                 print('Timeout, continuing to next combination...')
