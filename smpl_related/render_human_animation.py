@@ -36,8 +36,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_mp4",
         type=str,
-        required=True,
-        help="Output path for the MP4 file."
+        default=None,
+        help="Output path for the MP4 file. If not provided, will use <obj_dir>/human_motion.mp4"
     )
     parser.add_argument(
         "--use_hdri",
@@ -87,6 +87,11 @@ if __name__ == "__main__":
     if not os.path.isdir(obj_dir):
         raise NotADirectoryError(f"The obj_dir '{obj_dir}' does not exist.")
     print(f"[Python Wrapper] OBJ directory verified: {obj_dir}")
+
+    # Set default output path if not provided
+    if args.output_mp4 is None:
+        args.output_mp4 = os.path.join(obj_dir, "human_motion.mp4")
+        print(f"[Python Wrapper] No output path provided, using default: {args.output_mp4}")
 
     # Ensure output directory exists
     output_dir = os.path.dirname(os.path.abspath(args.output_mp4))

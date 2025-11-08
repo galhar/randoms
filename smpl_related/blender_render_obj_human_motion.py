@@ -54,6 +54,66 @@ def get_scene_bbox(objects=None):
     
     return bbox_min, bbox_max
 
+def calculate_motion_bbox(imported_objects, scene, frame_start, frame_end, frame_step=1):
+    """Calculate the bounding box that encompasses the entire motion across all frames.
+    
+    This function iterates through all frames and calculates the union of all bounding boxes
+    to determine the full extent of the human's movement in space.
+    
+    Args:
+        imported_objects: List of imported mesh objects (one per frame
+        scene: Blender scene object
+        frame_start: Starting frame number
+        frame_end: Ending frame number
+        frame_step: Step between frames (default: 1)
+    
+    Returns:
+        Tuple[Vector, Vector, Vector]: (bbox_min, bbox_max, bbox_center)
+    """
+    print(f"[Blender Script] Calculating motion bounding box across frames {frame_start} to {frame_end}...")
+    
+    motion_bbox_min = Vector((math.inf, math.inf, math.inf))
+    motion_bbox_max = Vector((-math.inf, -math.inf, -math.inf))
+    
+    # Store original frame
+    original_frame = scene.frame_current
+    
+    # Iterate through all frames to find the full extent of motion
+    for frame in range(frame_start, frame_end + 1, frame_step):
+        scene.frame_set(frame)
+        bpy.context.view_layer.update()
+        
+        # Get visible objects at this frame (objects that are not hidden)
+        visible_objects = [obj for obj in imported_objects if not obj.hide_render]
+        
+        if visible_objects:
+            frame_bbox_min, frame_bbox_max = get_scene_bbox(visible_objects)
+            
+            # Update overall motion bbox
+            motion_bbox_min = Vector((
+                min(motion_bbox_min.x, frame_bbox_min.x),
+                min(motion_bbox_min.y, frame_bbox_min.y),
+                min(motion_bbox_min.z, frame_bbox_min.z)
+            ))
+            motion_bbox_max = Vector((
+                max(motion_bbox_max.x, frame_bbox_max.x),
+                max(motion_bbox_max.y, frame_bbox_max.y),
+                max(motion_bbox_max.z, frame_bbox_max.z)
+            ))
+    
+    # Restore original frame
+    scene.frame_set(original_frame)
+    bpy.context.view_layer.update()
+    
+    # Calculate center
+    bbox_center = (motion_bbox_min + motion_bbox_max) / 2
+    
+    print(f"[Blender Script] Motion bbox: min=({motion_bbox_min.x:.3f}, {motion_bbox_min.y:.3f}, {motion_bbox_min.z:.3f}), "
+          f"max=({motion_bbox_max.x:.3f}, {motion_bbox_max.y:.3f}, {motion_bbox_max.z:.3f}), "
+          f"center=({bbox_center.x:.3f}, {bbox_center.y:.3f}, {bbox_center.z:.3f})")
+    
+    return motion_bbox_min, motion_bbox_max, bbox_center
+
 def render_human_animation(
     obj_dir: str,
     file_prefix: str,
@@ -222,21 +282,31 @@ def render_human_animation(
 
     # ----------------------- Lighting / World -----------------
     print(f"[Blender Script] Setting up lighting...")
+    
+    # Set up world with white background
+    world = bpy.data.worlds.get("World") or bpy.data.worlds.new("World")
+    scene.world = world
+    world.use_nodes = True
+    wnodes = world.node_tree.nodes
+    wlinks = world.node_tree.links
+    wnodes.clear()
+    w_output = wnodes.new("ShaderNodeOutputWorld")
+    w_bg = wnodes.new("ShaderNodeBackground")
+    
     if use_hdri and hdri_path and os.path.isfile(hdri_path):
-        world = bpy.data.worlds.get("World") or bpy.data.worlds.new("World")
-        scene.world = world
-        world.use_nodes = True
-        wnodes = world.node_tree.nodes
-        wlinks = world.node_tree.links
-        wnodes.clear()
-        w_output = wnodes.new("ShaderNodeOutputWorld")
-        w_bg = wnodes.new("ShaderNodeBackground")
         w_env = wnodes.new("ShaderNodeTexEnvironment")
         w_env.image = bpy.data.images.load(hdri_path)
         w_bg.inputs["Strength"].default_value = 1.2
         wlinks.new(w_env.outputs["Color"], w_bg.inputs["Color"])
         wlinks.new(w_bg.outputs["Background"], w_output.inputs["Surface"])
+        print(f"[Blender Script] HDRI lighting enabled")
     else:
+        # White background
+        w_bg.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)  # White
+        w_bg.inputs["Strength"].default_value = 1.0
+        wlinks.new(w_bg.outputs["Background"], w_output.inputs["Surface"])
+        print(f"[Blender Script] White background set")
+        
         # Three-point light rig
         def add_light(name, type, energy, loc, rot):
             light_data = bpy.data.lights.new(name=name, type=type)
@@ -251,23 +321,51 @@ def render_human_animation(
         add_light("Rim",  'SPOT', 1500, (0.0, 3.5, 2.5), (math.radians(200), 0, 0))
         print(f"[Blender Script] Three-point light rig created")
 
+    # ----------------------- Calculate motion bounding box ------------------
+    # Calculate the full extent of human motion across all frames
+    motion_bbox_min = None
+    motion_bbox_max = None
+    motion_bbox_center = None
+    
+    if imported_objects:
+        motion_bbox_min, motion_bbox_max, motion_bbox_center = calculate_motion_bbox(
+            imported_objects, scene, scene.frame_start, scene.frame_end, scene.frame_step
+        )
+    
     # ----------------------- Ground plane (soft shadow) -------
     print(f"[Blender Script] Creating ground plane...")
-    # Calculate bounding box to position floor at bottom of human
-    # Update view layer to ensure transforms are applied
-    bpy.context.view_layer.update()
-    if imported_objects:
-        bbox_min, bbox_max = get_scene_bbox(imported_objects)
-        floor_z = bbox_min.z - 0.01  # Slightly below the bottom to ensure contact
-        print(f"[Blender Script] Human bounding box: min=({bbox_min.x:.3f}, {bbox_min.y:.3f}, {bbox_min.z:.3f}), max=({bbox_max.x:.3f}, {bbox_max.y:.3f}, {bbox_max.z:.3f})")
-        print(f"[Blender Script] Positioning floor at Z={floor_z:.3f}")
+    if motion_bbox_min is not None:
+        # Calculate floor size to cover motion area with padding
+        motion_size_x = motion_bbox_max.x - motion_bbox_min.x
+        motion_size_y = motion_bbox_max.y - motion_bbox_min.y
+        padding = 0.5  # Add 0.5 units padding on each side
+        floor_size_x = motion_size_x + 2 * padding
+        floor_size_y = motion_size_y + 2 * padding
+        
+        # Position floor at bottom of motion with slight offset
+        floor_z = motion_bbox_min.z - 0.01
+        floor_center_x = (motion_bbox_min.x + motion_bbox_max.x) / 2
+        floor_center_y = (motion_bbox_min.y + motion_bbox_max.y) / 2
+        
+        print(f"[Blender Script] Floor size: {floor_size_x:.3f} x {floor_size_y:.3f}, center=({floor_center_x:.3f}, {floor_center_y:.3f}, {floor_z:.3f})")
+        
+        # Create floor plane with calculated size and position
+        # Use the larger dimension as base size, then scale
+        base_size = max(floor_size_x, floor_size_y)
+        bpy.ops.mesh.primitive_plane_add(size=base_size, location=(floor_center_x, floor_center_y, floor_z))
+        ground = bpy.context.active_object
+        ground.name = "Ground"
+        # Scale to match exact rectangular dimensions
+        if base_size > 0:
+            ground.scale = (floor_size_x / base_size, floor_size_y / base_size, 1.0)
     else:
+        # Fallback to default
         floor_z = 0.0
-        print(f"[Blender Script] No objects found, using default floor position Z=0")
+        bpy.ops.mesh.primitive_plane_add(size=6, location=(0, 0, floor_z))
+        ground = bpy.context.active_object
+        ground.name = "Ground"
+        print(f"[Blender Script] No objects found, using default floor")
     
-    bpy.ops.mesh.primitive_plane_add(size=6, location=(0, 0, floor_z))
-    ground = bpy.context.active_object
-    ground.name = "Ground"
     ground_mat = bpy.data.materials.new("GroundMat")
     ground_mat.use_nodes = True
     g_nodes = ground_mat.node_tree.nodes
@@ -286,26 +384,75 @@ def render_human_animation(
     cam = bpy.data.objects.new("Cam", cam_data)
     scene.collection.objects.link(cam)
     scene.camera = cam
-    cam.location = (2.2, -3.2, 1.8)
-    cam.rotation_euler = (math.radians(70), 0, math.radians(35))
-    cam.data.lens = 55  # mild tele look
-    cam.data.dof.use_dof = True
-    # Focus to average location of meshes
-    if imported_objects:
-        ref = imported_objects[min(1, len(imported_objects)-1)]
-        cam.data.dof.focus_object = ref
-        cam.data.dof.aperture_fstop = 4.0
-
-    # Subtle dolly for production feel
-    if cinematic_dolly:
-        cam.keyframe_insert(data_path="location", frame=1)
-        cam.keyframe_insert(data_path="rotation_euler", frame=1)
-        cam.location = (2.0, -3.0, 1.75)
-        cam.rotation_euler = (math.radians(69), 0, math.radians(33))
-        cam.keyframe_insert(data_path="location", frame=n_frames)
-        cam.keyframe_insert(data_path="rotation_euler", frame=n_frames)
-        print(f"[Blender Script] Camera dolly animation enabled")
-    print(f"[Blender Script] Camera configured")
+    
+    if motion_bbox_min is not None and motion_bbox_max is not None and imported_objects:
+        # Set frame to 1 to get the starting position
+        scene.frame_set(1)
+        bpy.context.view_layer.update()
+        
+        # Get the bounding box of the first frame (starting position)
+        first_frame_objects = [obj for obj in imported_objects if not obj.hide_render]
+        if first_frame_objects:
+            start_bbox_min, start_bbox_max = get_scene_bbox(first_frame_objects)
+            start_bbox_center = (start_bbox_min + start_bbox_max) / 2
+            
+            # Calculate motion size for camera distance
+            motion_size = Vector((
+                motion_bbox_max.x - motion_bbox_min.x,
+                motion_bbox_max.y - motion_bbox_min.y,
+                motion_bbox_max.z - motion_bbox_min.z
+            ))
+            diagonal_size = math.sqrt(motion_size.x**2 + motion_size.y**2 + motion_size.z**2)
+            
+            # Position camera in front of the person at starting position
+            # Camera should be in front (positive Y direction typically, but we'll use negative to be in front)
+            # and elevated to see the full motion
+            camera_distance = diagonal_size * 1.5  # Distance to see entire motion
+            camera_height = start_bbox_center.z + motion_size.z * 0.3  # Slightly elevated
+            
+            # Position camera in front (negative Y) and slightly to the side for better view
+            # Front view: camera should be in front of starting position
+            cam_x = start_bbox_center.x  # Centered horizontally
+            cam_y = start_bbox_min.y - camera_distance * 0.7  # In front (negative Y direction)
+            cam_z = camera_height
+            
+            cam.location = (cam_x, cam_y, cam_z)
+            
+            # Point camera at the starting position center
+            direction = start_bbox_center - cam.location
+            rot_quat = direction.to_track_quat("-Z", "Y")
+            cam.rotation_euler = rot_quat.to_euler()
+            
+            cam.data.lens = 35  # Standard lens
+            cam.data.dof.use_dof = True
+            cam.data.dof.focus_distance = direction.length
+            cam.data.dof.aperture_fstop = 4.0
+            
+            print(f"[Blender Script] Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f})")
+            print(f"[Blender Script] Camera pointing at starting position center ({start_bbox_center.x:.3f}, {start_bbox_center.y:.3f}, {start_bbox_center.z:.3f})")
+            print(f"[Blender Script] Camera is STATIC (no movement during animation)")
+        else:
+            # Fallback
+            cam.location = (0, -3, 1.5)
+            cam.rotation_euler = (math.radians(70), 0, 0)
+            cam.data.lens = 35
+    else:
+        # Fallback to default camera position
+        cam.location = (0, -3, 1.5)
+        cam.rotation_euler = (math.radians(70), 0, 0)
+        cam.data.lens = 35
+        cam.data.dof.use_dof = True
+        if imported_objects:
+            ref = imported_objects[min(1, len(imported_objects)-1)]
+            cam.data.dof.focus_object = ref
+            cam.data.dof.aperture_fstop = 4.0
+    
+    # Ensure camera is static - no keyframes
+    # Remove any existing animation data
+    if cam.animation_data:
+        cam.animation_data_clear()
+    
+    print(f"[Blender Script] Camera configured (static)")
 
     # ----------------------- Cycles / Denoising ----------------
     print(f"[Blender Script] Configuring Cycles render settings...")
@@ -390,8 +537,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_mp4",
         type=str,
-        required=True,
-        help="Output path for the MP4 file."
+        default=None,
+        help="Output path for the MP4 file. If not provided, will use <obj_dir>/human_motion.mp4"
     )
     parser.add_argument(
         "--use_hdri",
@@ -420,6 +567,11 @@ if __name__ == "__main__":
     # Parse arguments after -- separator (like reference code)
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else sys.argv[1:]
     args = parser.parse_args(argv)
+    
+    # Set default output path if not provided
+    if args.output_mp4 is None:
+        args.output_mp4 = os.path.join(args.obj_dir, "human_motion.mp4")
+        print(f"[Blender Script] No output path provided, using default: {args.output_mp4}")
     
     print(f"[Blender Script] ========================================")
     print(f"[Blender Script] Blender script started")
