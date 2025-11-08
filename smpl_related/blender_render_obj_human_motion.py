@@ -114,6 +114,74 @@ def calculate_motion_bbox(imported_objects, scene, frame_start, frame_end, frame
     
     return motion_bbox_min, motion_bbox_max, bbox_center
 
+def get_evenly_spaced_indices(total_frames: int, n_frames: int) -> list:
+    """Get N evenly-spaced frame indices from total frames.
+    
+    Args:
+        total_frames: Total number of frames available
+        n_frames: Number of frames to select
+    
+    Returns:
+        List of frame indices (0-based)
+    """
+    if n_frames >= total_frames:
+        return list(range(total_frames))
+    if n_frames <= 1:
+        return [0]
+    
+    step = (total_frames - 1) / (n_frames - 1)
+    indices = [int(round(i * step)) for i in range(n_frames)]
+    # Ensure we don't exceed bounds
+    indices = [min(idx, total_frames - 1) for idx in indices]
+    return indices
+
+def apply_gradient_colors(objects: list, start_color: tuple = (0.2, 0.4, 0.8, 1.0), end_color: tuple = (0.8, 0.4, 0.2, 1.0)):
+    """Apply gradually alternating colors to a list of objects.
+    
+    Args:
+        objects: List of mesh objects
+        start_color: Starting color (RGBA tuple, 0-1 range)
+        end_color: Ending color (RGBA tuple, 0-1 range)
+    """
+    n_objects = len(objects)
+    if n_objects == 0:
+        return
+    
+    for i, obj in enumerate(objects):
+        # Calculate interpolation factor
+        t = i / (n_objects - 1) if n_objects > 1 else 0
+        
+        # Interpolate color
+        color = tuple(
+            start_color[j] * (1 - t) + end_color[j] * t
+            for j in range(4)
+        )
+        
+        # Create material for this object
+        mat = bpy.data.materials.new(name=f"GradientMat_{i:04d}")
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        links = mat.node_tree.links
+        
+        # Clear default nodes except output
+        for n in list(nodes):
+            if n.type not in {'OUTPUT_MATERIAL'}:
+                nodes.remove(n)
+        
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        bsdf.inputs["Base Color"].default_value = color
+        bsdf.inputs["Metallic"].default_value = 0.0
+        bsdf.inputs["Roughness"].default_value = 0.55
+        
+        out = nodes["Material Output"]
+        links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+        
+        # Apply material to object
+        if obj.data.materials:
+            obj.data.materials[0] = mat
+        else:
+            obj.data.materials.append(mat)
+
 def render_human_animation(
     obj_dir: str,
     file_prefix: str,
@@ -124,6 +192,7 @@ def render_human_animation(
     hdri_path: str,
     cinematic_dolly: bool,
     max_frames: int = None,
+    composite_frames: int = None,
 ) -> None:
     """Renders a human animation from OBJ sequence files.
     
@@ -132,14 +201,18 @@ def render_human_animation(
         file_prefix: Filename prefix (e.g., "frame")
         fps: Framerate
         resolution: (width, height) tuple
-        output_mp4: Output MP4 file path
+        output_mp4: Output MP4 file path (or PNG if composite mode)
         use_hdri: Whether to use HDRI lighting
         hdri_path: Path to HDRI file (if use_hdri is True)
         cinematic_dolly: Whether to enable camera dolly
         max_frames: Maximum number of frames to process (None for all)
+        composite_frames: If set, creates static composite with N evenly-spaced frames
     """
+    is_composite_mode = composite_frames is not None and composite_frames > 0
     print(f"[Blender Script] Starting render_human_animation function")
-    print(f"[Blender Script] Parameters: obj_dir={obj_dir}, prefix={file_prefix}, fps={fps}, resolution={resolution}, max_frames={max_frames}")
+    print(f"[Blender Script] Parameters: obj_dir={obj_dir}, prefix={file_prefix}, fps={fps}, resolution={resolution}, max_frames={max_frames}, composite_frames={composite_frames}")
+    if is_composite_mode:
+        print(f"[Blender Script] COMPOSITE MODE: Will create static image with {composite_frames} evenly-spaced frames")
     
     # ----------------------- Start fresh ----------------------
     print(f"[Blender Script] Purging scene...")
@@ -175,10 +248,24 @@ def render_human_animation(
 
     files.sort(key=natural_key)
     
-    # Truncate to max_frames if specified
-    if max_frames is not None and max_frames > 0:
-        files = files[:max_frames]
-        print(f"[Blender Script] Truncating to first {max_frames} frames for debugging")
+    # Handle composite mode: select evenly-spaced frames
+    if is_composite_mode:
+        total_files = len(files)
+        # Truncate to max_frames first if specified
+        if max_frames is not None and max_frames > 0:
+            total_files = min(total_files, max_frames)
+        
+        # Get evenly-spaced indices
+        selected_indices = get_evenly_spaced_indices(total_files, composite_frames)
+        selected_files = [files[i] for i in selected_indices]
+        files = selected_files
+        print(f"[Blender Script] Composite mode: Selected {len(files)} evenly-spaced frames from {total_files} total frames")
+        print(f"[Blender Script] Selected frame indices: {selected_indices}")
+    else:
+        # Truncate to max_frames if specified
+        if max_frames is not None and max_frames > 0:
+            files = files[:max_frames]
+            print(f"[Blender Script] Truncating to first {max_frames} frames for debugging")
     
     n_frames = len(files)
     scene.frame_start = 1
@@ -222,63 +309,80 @@ def render_human_animation(
             # Auto smooth might not be available, just use smooth shading
             pass
 
-        # Hide on all frames except its own
-        obj.hide_viewport = True
-        obj.hide_render = True
-        obj.keyframe_insert("hide_viewport", frame=max(1, i-1))
-        obj.keyframe_insert("hide_render", frame=max(1, i-1))
+        # In composite mode, keep all objects visible
+        # In animation mode, hide on all frames except its own
+        if is_composite_mode:
+            obj.hide_viewport = False
+            obj.hide_render = False
+        else:
+            obj.hide_viewport = True
+            obj.hide_render = True
+            obj.keyframe_insert("hide_viewport", frame=max(1, i-1))
+            obj.keyframe_insert("hide_render", frame=max(1, i-1))
 
-        obj.hide_viewport = False
-        obj.hide_render = False
-        obj.keyframe_insert("hide_viewport", frame=i)
-        obj.keyframe_insert("hide_render", frame=i)
+            obj.hide_viewport = False
+            obj.hide_render = False
+            obj.keyframe_insert("hide_viewport", frame=i)
+            obj.keyframe_insert("hide_render", frame=i)
 
-        obj.hide_viewport = True
-        obj.hide_render = True
-        obj.keyframe_insert("hide_viewport", frame=i+1)
-        obj.keyframe_insert("hide_render", frame=i+1)
+            obj.hide_viewport = True
+            obj.hide_render = True
+            obj.keyframe_insert("hide_viewport", frame=i+1)
+            obj.keyframe_insert("hide_render", frame=i+1)
 
         imported_objects.append(obj)
 
     print(f"[Blender Script] Successfully imported {len(imported_objects)} objects")
     
-    # ----------------------- Single material ------------------
-    print(f"[Blender Script] Creating material...")
-    # Create a pleasing principled material (skin-ish but generic)
-    mat = bpy.data.materials.new("BodyMat")
-    mat.use_nodes = True
-    nodes = mat.node_tree.nodes
-    links = mat.node_tree.links
-    for n in list(nodes):
-        if n.type not in {'OUTPUT_MATERIAL'}:
-            nodes.remove(n)
+    # ----------------------- Materials ------------------
+    if is_composite_mode:
+        # Apply gradient colors in composite mode
+        # All orange with increasing brightness
+        print(f"[Blender Script] Applying gradient colors to {len(imported_objects)} objects...")
+        apply_gradient_colors(
+            imported_objects,
+            start_color=(0.4, 0.2, 0.0, 1.0),   # Dark orange
+            end_color=(1.0, 0.6, 0.2, 1.0)      # Bright orange
+        )
+        print(f"[Blender Script] Gradient colors applied (orange with increasing brightness)")
+    else:
+        # Single material for animation mode
+        print(f"[Blender Script] Creating material...")
+        # Create a pleasing principled material (skin-ish but generic)
+        mat = bpy.data.materials.new("BodyMat")
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        links = mat.node_tree.links
+        for n in list(nodes):
+            if n.type not in {'OUTPUT_MATERIAL'}:
+                nodes.remove(n)
 
-    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-    bsdf.inputs["Base Color"].default_value = (0.63, 0.49, 0.42, 1.0)  # warm neutral
-    bsdf.inputs["Metallic"].default_value = 0.0
-    bsdf.inputs["Roughness"].default_value = 0.55
-    # Set subsurface if available (might have different name in different Blender versions)
-    try:
-        bsdf.inputs["Subsurface"].default_value = 0.25
-        bsdf.inputs["Subsurface Radius"].default_value = (1.0, 0.5, 0.25)
-    except KeyError:
-        # Try alternative name
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        bsdf.inputs["Base Color"].default_value = (0.63, 0.49, 0.42, 1.0)  # warm neutral
+        bsdf.inputs["Metallic"].default_value = 0.0
+        bsdf.inputs["Roughness"].default_value = 0.55
+        # Set subsurface if available (might have different name in different Blender versions)
         try:
-            bsdf.inputs["Subsurface Weight"].default_value = 0.25
+            bsdf.inputs["Subsurface"].default_value = 0.25
             bsdf.inputs["Subsurface Radius"].default_value = (1.0, 0.5, 0.25)
         except KeyError:
-            # Subsurface not available in this Blender version, skip it
-            pass
+            # Try alternative name
+            try:
+                bsdf.inputs["Subsurface Weight"].default_value = 0.25
+                bsdf.inputs["Subsurface Radius"].default_value = (1.0, 0.5, 0.25)
+            except KeyError:
+                # Subsurface not available in this Blender version, skip it
+                pass
 
-    out = nodes["Material Output"]
-    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+        out = nodes["Material Output"]
+        links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
 
-    for obj in imported_objects:
-        if obj.data.materials:
-            obj.data.materials[0] = mat
-        else:
-            obj.data.materials.append(mat)
-    print(f"[Blender Script] Material applied to {len(imported_objects)} objects")
+        for obj in imported_objects:
+            if obj.data.materials:
+                obj.data.materials[0] = mat
+            else:
+                obj.data.materials.append(mat)
+        print(f"[Blender Script] Material applied to {len(imported_objects)} objects")
 
     # ----------------------- Lighting / World -----------------
     print(f"[Blender Script] Setting up lighting...")
@@ -474,37 +578,71 @@ def render_human_animation(
     except:
         scene.cycles.denoiser = 'OPENIMAGEDENOISE'
 
-    # ----------------------- Output (FFmpeg/H.264) -------------
-    scene.render.image_settings.file_format = 'FFMPEG'
-    scene.render.ffmpeg.format = 'MPEG4'
-    scene.render.ffmpeg.codec = 'H264'
-    scene.render.ffmpeg.constant_rate_factor = 'HIGH'
-    scene.render.ffmpeg.ffmpeg_preset = 'GOOD'
-    scene.render.ffmpeg.max_b_frames = 2
-    scene.render.filepath = output_mp4
+    # ----------------------- Output -----------------------------
+    if is_composite_mode:
+        # Composite mode: render single PNG frame
+        output_path = output_mp4
+        # Change extension to PNG if it's MP4
+        if output_path.lower().endswith('.mp4'):
+            output_path = output_path[:-4] + '.png'
+        
+        scene.render.image_settings.file_format = 'PNG'
+        scene.render.image_settings.color_mode = 'RGBA'
+        scene.render.filepath = output_path
+        
+        print(f"[Blender Script] ========================================")
+        print(f"[Blender Script] Setup complete!")
+        print(f"[Blender Script] - Imported {len(imported_objects)} OBJ frames (composite mode)")
+        print(f"[Blender Script] - Output: {output_path}")
+        print(f"[Blender Script] - Resolution: {resolution[0]}x{resolution[1]}")
+        print(f"[Blender Script] - All frames visible with gradient colors")
+        print(f"[Blender Script] ========================================")
+        print(f"[Blender Script] Starting single frame render...")
+        
+        # Render single frame
+        import time
+        start_time = time.time()
+        scene.frame_set(1)
+        bpy.ops.render.render(write_still=True)
+        elapsed_time = time.time() - start_time
+        
+        print(f"[Blender Script] ========================================")
+        print(f"[Blender Script] Render complete!")
+        print(f"[Blender Script] Total render time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+        print(f"[Blender Script] Output saved to: {output_path}")
+        print(f"[Blender Script] ========================================")
+    else:
+        # Animation mode: render MP4
+        scene.render.image_settings.file_format = 'FFMPEG'
+        scene.render.ffmpeg.format = 'MPEG4'
+        scene.render.ffmpeg.codec = 'H264'
+        scene.render.ffmpeg.constant_rate_factor = 'HIGH'
+        scene.render.ffmpeg.ffmpeg_preset = 'GOOD'
+        scene.render.ffmpeg.max_b_frames = 2
+        scene.render.filepath = output_mp4
 
-    print(f"[Blender Script] ========================================")
-    print(f"[Blender Script] Setup complete!")
-    print(f"[Blender Script] - Imported {n_frames} OBJ frames")
-    print(f"[Blender Script] - Output: {output_mp4}")
-    print(f"[Blender Script] - Resolution: {resolution[0]}x{resolution[1]}")
-    print(f"[Blender Script] - FPS: {fps}")
-    print(f"[Blender Script] - Frame range: {scene.frame_start} to {scene.frame_end}")
-    print(f"[Blender Script] ========================================")
-    print(f"[Blender Script] Starting animation render...")
-    print(f"[Blender Script] This may take a while depending on resolution and frame count...")
-    
-    # Render with progress updates
-    import time
-    start_time = time.time()
-    bpy.ops.render.render(animation=True)
-    elapsed_time = time.time() - start_time
-    
-    print(f"[Blender Script] ========================================")
-    print(f"[Blender Script] Render complete!")
-    print(f"[Blender Script] Total render time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
-    print(f"[Blender Script] Output saved to: {output_mp4}")
-    print(f"[Blender Script] ========================================")
+        print(f"[Blender Script] ========================================")
+        print(f"[Blender Script] Setup complete!")
+        print(f"[Blender Script] - Imported {n_frames} OBJ frames")
+        print(f"[Blender Script] - Output: {output_mp4}")
+        print(f"[Blender Script] - Resolution: {resolution[0]}x{resolution[1]}")
+        print(f"[Blender Script] - FPS: {fps}")
+        print(f"[Blender Script] - Frame range: {scene.frame_start} to {scene.frame_end}")
+        print(f"[Blender Script] ========================================")
+        print(f"[Blender Script] Starting animation render...")
+        print(f"[Blender Script] This may take a while depending on resolution and frame count...")
+        
+        # Render with progress updates
+        import time
+        start_time = time.time()
+        bpy.ops.render.render(animation=True)
+        elapsed_time = time.time() - start_time
+        
+        print(f"[Blender Script] ========================================")
+        print(f"[Blender Script] Render complete!")
+        print(f"[Blender Script] Total render time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+        print(f"[Blender Script] Output saved to: {output_mp4}")
+        print(f"[Blender Script] ========================================")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Render human animation from OBJ sequence files.")
@@ -563,6 +701,12 @@ if __name__ == "__main__":
         default=None,
         help="Maximum number of frames to process (for debugging/testing). If None, processes all frames."
     )
+    parser.add_argument(
+        "--composite_frames",
+        type=int,
+        default=None,
+        help="If set, creates a static composite image with N evenly-spaced frames visible at once with gradient colors. Overrides animation rendering."
+    )
     
     # Parse arguments after -- separator (like reference code)
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else sys.argv[1:]
@@ -588,4 +732,5 @@ if __name__ == "__main__":
         hdri_path=args.hdri_path,
         cinematic_dolly=args.cinematic_dolly,
         max_frames=args.max_frames,
+        composite_frames=args.composite_frames,
     )

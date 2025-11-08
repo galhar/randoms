@@ -68,6 +68,12 @@ if __name__ == "__main__":
         default=None,
         help="Maximum number of frames to process (for debugging/testing). If None, processes all frames."
     )
+    parser.add_argument(
+        "--composite_frames",
+        type=int,
+        default=None,
+        help="If set, creates a static composite image with N evenly-spaced frames visible at once with gradient colors. Overrides animation rendering."
+    )
     args = parser.parse_args()
 
     print(f"[Python Wrapper] Starting render_human_animation.py")
@@ -80,6 +86,7 @@ if __name__ == "__main__":
     print(f"  - Use HDRI: {args.use_hdri}")
     print(f"  - Cinematic dolly: {args.cinematic_dolly}")
     print(f"  - Max frames: {args.max_frames if args.max_frames else 'All'}")
+    print(f"  - Composite frames: {args.composite_frames if args.composite_frames else 'None (animation mode)'}")
 
     obj_dir = args.obj_dir
 
@@ -90,7 +97,10 @@ if __name__ == "__main__":
 
     # Set default output path if not provided
     if args.output_mp4 is None:
-        args.output_mp4 = os.path.join(obj_dir, "human_motion.mp4")
+        if args.composite_frames is not None:
+            args.output_mp4 = os.path.join(obj_dir, "human_motion_composite.png")
+        else:
+            args.output_mp4 = os.path.join(obj_dir, "human_motion.mp4")
         print(f"[Python Wrapper] No output path provided, using default: {args.output_mp4}")
 
     # Ensure output directory exists
@@ -127,6 +137,9 @@ if __name__ == "__main__":
     
     if args.max_frames is not None:
         blender_args += f" --max_frames {args.max_frames}"
+    
+    if args.composite_frames is not None:
+        blender_args += f" --composite_frames {args.composite_frames}"
 
     command = f"/snap/blender/current/blender --background --python {shlex.quote(blender_script_path)} -- {blender_args}"
     full_command = f"export DISPLAY=:0.0 && {command}"
@@ -149,11 +162,16 @@ if __name__ == "__main__":
             print(f"[Python Wrapper] WARNING: Blender exited with code {res.returncode}")
         else:
             print(f"[Python Wrapper] Blender completed successfully at {datetime.now()}")
-            if os.path.exists(args.output_mp4):
-                file_size = os.path.getsize(args.output_mp4)
-                print(f"[Python Wrapper] Output file created: {args.output_mp4} ({file_size / (1024*1024):.2f} MB)")
+            # Check for output file (could be MP4 or PNG depending on mode)
+            output_file = args.output_mp4
+            if args.composite_frames is not None and output_file.lower().endswith('.mp4'):
+                output_file = output_file[:-4] + '.png'
+            
+            if os.path.exists(output_file):
+                file_size = os.path.getsize(output_file)
+                print(f"[Python Wrapper] Output file created: {output_file} ({file_size / (1024*1024):.2f} MB)")
             else:
-                print(f"[Python Wrapper] WARNING: Output file not found at {args.output_mp4}")
+                print(f"[Python Wrapper] WARNING: Output file not found at {output_file}")
     except subprocess.TimeoutExpired:
         print(f'[Python Wrapper] ERROR: Timeout after 1 hour, rendering took too long...')
 
