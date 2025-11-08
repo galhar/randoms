@@ -358,7 +358,7 @@ def render_human_animation(
                 nodes.remove(n)
 
         bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-        bsdf.inputs["Base Color"].default_value = (0.63, 0.49, 0.42, 1.0)  # warm neutral
+        bsdf.inputs["Base Color"].default_value = (0.4, 0.2, 0.0, 1.0)  # Dark orange (same as composite mode start color)
         bsdf.inputs["Metallic"].default_value = 0.0
         bsdf.inputs["Roughness"].default_value = 0.55
         # Set subsurface if available (might have different name in different Blender versions)
@@ -446,8 +446,8 @@ def render_human_animation(
         floor_size_x = motion_size_x + 2 * padding
         floor_size_y = motion_size_y + 2 * padding
         
-        # Position floor at bottom of motion with slight offset
-        floor_z = motion_bbox_min.z - 0.01
+        # Position floor exactly at the lowest point of the feet
+        floor_z = motion_bbox_min.z
         floor_center_x = (motion_bbox_min.x + motion_bbox_max.x) / 2
         floor_center_y = (motion_bbox_min.y + motion_bbox_max.y) / 2
         
@@ -490,56 +490,45 @@ def render_human_animation(
     scene.camera = cam
     
     if motion_bbox_min is not None and motion_bbox_max is not None and imported_objects:
-        # Set frame to 1 to get the starting position
-        scene.frame_set(1)
-        bpy.context.view_layer.update()
+        # Use motion center (like composite mode) to see entire motion
+        # This ensures the camera can see the person throughout the entire walking motion
         
-        # Get the bounding box of the first frame (starting position)
-        first_frame_objects = [obj for obj in imported_objects if not obj.hide_render]
-        if first_frame_objects:
-            start_bbox_min, start_bbox_max = get_scene_bbox(first_frame_objects)
-            start_bbox_center = (start_bbox_min + start_bbox_max) / 2
-            
-            # Calculate motion size for camera distance
-            motion_size = Vector((
-                motion_bbox_max.x - motion_bbox_min.x,
-                motion_bbox_max.y - motion_bbox_min.y,
-                motion_bbox_max.z - motion_bbox_min.z
-            ))
-            diagonal_size = math.sqrt(motion_size.x**2 + motion_size.y**2 + motion_size.z**2)
-            
-            # Position camera in front of the person at starting position
-            # Camera should be in front (positive Y direction typically, but we'll use negative to be in front)
-            # and elevated to see the full motion
-            camera_distance = diagonal_size * 1.5  # Distance to see entire motion
-            camera_height = start_bbox_center.z + motion_size.z * 0.3  # Slightly elevated
-            
-            # Position camera in front (negative Y) and slightly to the side for better view
-            # Front view: camera should be in front of starting position
-            cam_x = start_bbox_center.x  # Centered horizontally
-            cam_y = start_bbox_min.y - camera_distance * 0.7  # In front (negative Y direction)
-            cam_z = camera_height
-            
-            cam.location = (cam_x, cam_y, cam_z)
-            
-            # Point camera at the starting position center
-            direction = start_bbox_center - cam.location
-            rot_quat = direction.to_track_quat("-Z", "Y")
-            cam.rotation_euler = rot_quat.to_euler()
-            
-            cam.data.lens = 35  # Standard lens
-            cam.data.dof.use_dof = True
-            cam.data.dof.focus_distance = direction.length
-            cam.data.dof.aperture_fstop = 4.0
-            
-            print(f"[Blender Script] Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f})")
-            print(f"[Blender Script] Camera pointing at starting position center ({start_bbox_center.x:.3f}, {start_bbox_center.y:.3f}, {start_bbox_center.z:.3f})")
-            print(f"[Blender Script] Camera is STATIC (no movement during animation)")
-        else:
-            # Fallback
-            cam.location = (0, -3, 1.5)
-            cam.rotation_euler = (math.radians(70), 0, 0)
-            cam.data.lens = 35
+        # Calculate motion size for camera distance
+        motion_size = Vector((
+            motion_bbox_max.x - motion_bbox_min.x,
+            motion_bbox_max.y - motion_bbox_min.y,
+            motion_bbox_max.z - motion_bbox_min.z
+        ))
+        diagonal_size = math.sqrt(motion_size.x**2 + motion_size.y**2 + motion_size.z**2)
+        
+        # Position camera on the side, slightly angled to see the front
+        # Camera should be mostly on the side but with a slight front angle
+        camera_distance = diagonal_size * 1.5  # Distance to see entire motion
+        camera_height = motion_bbox_center.z + motion_size.z * 0.3  # Slightly elevated
+        
+        # Position camera on the side (positive X) with slight front angle
+        # Mostly side view, but slightly forward to see the front
+        side_offset = camera_distance * 0.8  # Mostly to the side
+        front_offset = camera_distance * 0.3  # Slight front angle
+        cam_x = motion_bbox_center.x + side_offset  # To the right side
+        cam_y = motion_bbox_min.y - front_offset  # Slightly in front (negative Y)
+        cam_z = camera_height
+        
+        cam.location = (cam_x, cam_y, cam_z)
+        
+        # Point camera at motion center (not just starting position)
+        direction = motion_bbox_center - cam.location
+        rot_quat = direction.to_track_quat("-Z", "Y")
+        cam.rotation_euler = rot_quat.to_euler()
+        
+        cam.data.lens = 35  # Standard lens
+        cam.data.dof.use_dof = True
+        cam.data.dof.focus_distance = direction.length
+        cam.data.dof.aperture_fstop = 4.0
+        
+        print(f"[Blender Script] Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f})")
+        print(f"[Blender Script] Camera pointing at motion center ({motion_bbox_center.x:.3f}, {motion_bbox_center.y:.3f}, {motion_bbox_center.z:.3f})")
+        print(f"[Blender Script] Camera is STATIC (no movement during animation)")
     else:
         # Fallback to default camera position
         cam.location = (0, -3, 1.5)

@@ -29,9 +29,9 @@ if __name__ == "__main__":
         "--resolution",
         type=int,
         nargs=2,
-        default=[1920, 1080],
+        default=[512, 512],
         metavar=("WIDTH", "HEIGHT"),
-        help="Render resolution (default: 1920 1080)."
+        help="Render resolution (default: 512 512)."
     )
     parser.add_argument(
         "--output_mp4",
@@ -97,10 +97,12 @@ if __name__ == "__main__":
 
     # Set default output path if not provided
     if args.output_mp4 is None:
+        obj_parent_dir = os.path.dirname(obj_dir)
+        obj_name = os.path.basename(obj_dir)
         if args.composite_frames is not None:
-            args.output_mp4 = os.path.join(obj_dir, "human_motion_composite.png")
+            args.output_mp4 = os.path.join(obj_parent_dir, f"{obj_name}_composite.png")
         else:
-            args.output_mp4 = os.path.join(obj_dir, "human_motion.mp4")
+            args.output_mp4 = os.path.join(obj_parent_dir, f"{obj_name}.mp4")
         print(f"[Python Wrapper] No output path provided, using default: {args.output_mp4}")
 
     # Ensure output directory exists
