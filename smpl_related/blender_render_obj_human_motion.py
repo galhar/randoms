@@ -193,6 +193,7 @@ def render_human_animation(
     cinematic_dolly: bool,
     max_frames: int = None,
     composite_frames: int = None,
+    separate: bool = False,
 ) -> None:
     """Renders a human animation from OBJ sequence files.
     
@@ -209,10 +210,14 @@ def render_human_animation(
         composite_frames: If set, creates static composite with N evenly-spaced frames
     """
     is_composite_mode = composite_frames is not None and composite_frames > 0
+    is_separate_mode = is_composite_mode and separate
     print(f"[Blender Script] Starting render_human_animation function")
-    print(f"[Blender Script] Parameters: obj_dir={obj_dir}, prefix={file_prefix}, fps={fps}, resolution={resolution}, max_frames={max_frames}, composite_frames={composite_frames}")
+    print(f"[Blender Script] Parameters: obj_dir={obj_dir}, prefix={file_prefix}, fps={fps}, resolution={resolution}, max_frames={max_frames}, composite_frames={composite_frames}, separate={separate}")
     if is_composite_mode:
-        print(f"[Blender Script] COMPOSITE MODE: Will create static image with {composite_frames} evenly-spaced frames")
+        if is_separate_mode:
+            print(f"[Blender Script] SEPARATE MODE: Will create static image with {composite_frames} evenly-spaced frames placed on floor in equally spaced regions")
+        else:
+            print(f"[Blender Script] COMPOSITE MODE: Will create static image with {composite_frames} evenly-spaced frames")
     
     # ----------------------- Start fresh ----------------------
     print(f"[Blender Script] Purging scene...")
@@ -341,7 +346,7 @@ def render_human_animation(
         print(f"[Blender Script] Applying gradient colors to {len(imported_objects)} objects...")
         apply_gradient_colors(
             imported_objects,
-            start_color=(0.4, 0.2, 0.0, 1.0),   # Dark orange
+            start_color=(0.2, 0.1, 0.0, 1.0),   # Very dark orange (increased range)
             end_color=(1.0, 0.6, 0.2, 1.0)      # Bright orange
         )
         print(f"[Blender Script] Gradient colors applied (orange with increasing brightness)")
@@ -383,6 +388,79 @@ def render_human_animation(
             else:
                 obj.data.materials.append(mat)
         print(f"[Blender Script] Material applied to {len(imported_objects)} objects")
+
+    # ----------------------- Separate Mode: Reposition objects on floor -----------------
+    if is_separate_mode:
+        print(f"[Blender Script] SEPARATE MODE: Repositioning {len(imported_objects)} objects on floor...")
+        
+        # First, calculate local bounding box for each object and find the lowest Z
+        object_local_centers = []
+        object_local_bboxes = []
+        lowest_z = math.inf
+        
+        for obj in imported_objects:
+            # Calculate local bounding box (relative to object's origin)
+            bbox_min = Vector((math.inf, math.inf, math.inf))
+            bbox_max = Vector((-math.inf, -math.inf, -math.inf))
+            
+            for coord in obj.bound_box:
+                coord = Vector(coord)
+                # Transform to world space
+                world_coord = obj.matrix_world @ coord
+                bbox_min = Vector((min(bbox_min.x, world_coord.x), min(bbox_min.y, world_coord.y), min(bbox_min.z, world_coord.z)))
+                bbox_max = Vector((max(bbox_max.x, world_coord.x), max(bbox_max.y, world_coord.y), max(bbox_max.z, world_coord.z)))
+            
+            # Calculate local center (world space center of this object)
+            local_center = (bbox_min + bbox_max) / 2
+            object_local_centers.append(local_center)
+            object_local_bboxes.append((bbox_min, bbox_max))
+            
+            # Track lowest Z across all objects
+            lowest_z = min(lowest_z, bbox_min.z)
+        
+        floor_z = lowest_z
+        print(f"[Blender Script] Floor level determined: z={floor_z:.3f}")
+        
+        # Calculate spacing for equally spaced positions
+        n_objects = len(imported_objects)
+        if n_objects == 1:
+            spacing = 2.0  # Default spacing for single object
+        else:
+            # Estimate spacing based on average object size
+            avg_size = 0.0
+            for bbox_min, bbox_max in object_local_bboxes:
+                size = max(bbox_max.x - bbox_min.x, bbox_max.y - bbox_min.y)
+                avg_size += size
+            avg_size /= n_objects
+            spacing = max(avg_size * 1.0, 1.0)  # Closer spacing: multiplier 1.0, minimum 1.0 units
+        
+        # Arrange objects in a line along X axis, equally spaced
+        total_width = spacing * (n_objects - 1) if n_objects > 1 else spacing
+        start_x = -total_width / 2
+        
+        # Reposition each object
+        for i, obj in enumerate(imported_objects):
+            # Get the object's current local center
+            current_center = object_local_centers[i]
+            
+            # Calculate target position: equally spaced along X axis
+            target_x = start_x + i * spacing if n_objects > 1 else 0.0
+            target_y = 0.0  # Center on Y axis
+            # Preserve original height relative to floor (don't center on floor)
+            target_z = current_center.z  # Keep original Z position
+            
+            # Calculate offset needed to move object to target position (only X and Y change)
+            offset = Vector((target_x, target_y, 0.0)) - Vector((current_center.x, current_center.y, 0.0))
+            
+            # Apply offset to object location (only X and Y change, Z stays the same)
+            obj.location = obj.location + offset
+            
+            print(f"[Blender Script] Object {i+1}/{n_objects} repositioned: center moved from ({current_center.x:.3f}, {current_center.y:.3f}, {current_center.z:.3f}) to ({target_x:.3f}, {target_y:.3f}, {current_center.z:.3f}) [height preserved]")
+        
+        print(f"[Blender Script] SEPARATE MODE: All objects repositioned on floor with spacing={spacing:.3f}")
+        
+        # Update view layer to reflect new positions
+        bpy.context.view_layer.update()
 
     # ----------------------- Lighting / World -----------------
     print(f"[Blender Script] Setting up lighting...")
@@ -427,11 +505,14 @@ def render_human_animation(
 
     # ----------------------- Calculate motion bounding box ------------------
     # Calculate the full extent of human motion across all frames
+    # In separate mode, this will reflect the new positions after repositioning
     motion_bbox_min = None
     motion_bbox_max = None
     motion_bbox_center = None
     
     if imported_objects:
+        # Update view layer to ensure all transformations are applied
+        bpy.context.view_layer.update()
         motion_bbox_min, motion_bbox_max, motion_bbox_center = calculate_motion_bbox(
             imported_objects, scene, scene.frame_start, scene.frame_end, scene.frame_step
         )
@@ -490,44 +571,82 @@ def render_human_animation(
     scene.camera = cam
     
     if motion_bbox_min is not None and motion_bbox_max is not None and imported_objects:
-        # Use motion center (like composite mode) to see entire motion
-        # This ensures the camera can see the person throughout the entire walking motion
+        if is_separate_mode:
+            # Separate mode: objects are arranged in a line along X axis
+            # Position camera to see all poses from a good angle
+            
+            # Calculate the extent of all separated objects
+            motion_size = Vector((
+                motion_bbox_max.x - motion_bbox_min.x,
+                motion_bbox_max.y - motion_bbox_min.y,
+                motion_bbox_max.z - motion_bbox_min.z
+            ))
+            
+            # Camera should be positioned to see the entire line of objects
+            # Position at an angle: more in front, less to the side, and farther away
+            camera_distance = max(motion_size.x * 1.2, 4.5)  # Farther distance based on width, minimum 4.5 units
+            camera_height = motion_bbox_center.z + motion_size.z * 0.3  # Slightly elevated to see poses clearly
+            
+            # Position camera: less to the side, more in front (but a bit backward)
+            cam_x = motion_bbox_center.x + camera_distance * 0.3  # Less to the right side
+            cam_y = motion_bbox_center.y - camera_distance * 0.9  # A bit backward from previous position
+            cam_z = camera_height
+            
+            cam.location = (cam_x, cam_y, cam_z)
+            
+            # Point camera at the center of all separated objects
+            direction = motion_bbox_center - cam.location
+            rot_quat = direction.to_track_quat("-Z", "Y")
+            cam.rotation_euler = rot_quat.to_euler()
+            
+            cam.data.lens = 35  # Standard lens
+            cam.data.dof.use_dof = True
+            cam.data.dof.focus_distance = direction.length
+            cam.data.dof.aperture_fstop = 4.0
+            
+            print(f"[Blender Script] SEPARATE MODE: Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f})")
+            print(f"[Blender Script] Camera pointing at center ({motion_bbox_center.x:.3f}, {motion_bbox_center.y:.3f}, {motion_bbox_center.z:.3f})")
+        else:
+            # Normal composite or animation mode
+            # Use motion center (like composite mode) to see entire motion
+            # This ensures the camera can see the person throughout the entire walking motion
+            
+            # Calculate motion size for camera distance
+            motion_size = Vector((
+                motion_bbox_max.x - motion_bbox_min.x,
+                motion_bbox_max.y - motion_bbox_min.y,
+                motion_bbox_max.z - motion_bbox_min.z
+            ))
+            diagonal_size = math.sqrt(motion_size.x**2 + motion_size.y**2 + motion_size.z**2)
+            
+            # Position camera on the side, slightly angled to see the front
+            # Camera should be mostly on the side but with a slight front angle
+            camera_distance = diagonal_size * 1.5  # Distance to see entire motion
+            camera_height = motion_bbox_center.z + motion_size.z * 0.3  # Slightly elevated
+            
+            # Position camera on the side (positive X) with slight front angle
+            # Mostly side view, but slightly forward to see the front
+            side_offset = camera_distance * 0.8  # Mostly to the side
+            front_offset = camera_distance * 0.3  # Slight front angle
+            cam_x = motion_bbox_center.x + side_offset  # To the right side
+            cam_y = motion_bbox_min.y - front_offset  # Slightly in front (negative Y)
+            cam_z = camera_height
+            
+            cam.location = (cam_x, cam_y, cam_z)
+            
+            # Point camera at motion center (not just starting position)
+            direction = motion_bbox_center - cam.location
+            rot_quat = direction.to_track_quat("-Z", "Y")
+            cam.rotation_euler = rot_quat.to_euler()
+            
+            cam.data.lens = 35  # Standard lens
+            cam.data.dof.use_dof = True
+            cam.data.dof.focus_distance = direction.length
+            cam.data.dof.aperture_fstop = 4.0
+            
+            print(f"[Blender Script] Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f})")
+            print(f"[Blender Script] Camera pointing at motion center ({motion_bbox_center.x:.3f}, {motion_bbox_center.y:.3f}, {motion_bbox_center.z:.3f})")
         
-        # Calculate motion size for camera distance
-        motion_size = Vector((
-            motion_bbox_max.x - motion_bbox_min.x,
-            motion_bbox_max.y - motion_bbox_min.y,
-            motion_bbox_max.z - motion_bbox_min.z
-        ))
-        diagonal_size = math.sqrt(motion_size.x**2 + motion_size.y**2 + motion_size.z**2)
-        
-        # Position camera on the side, slightly angled to see the front
-        # Camera should be mostly on the side but with a slight front angle
-        camera_distance = diagonal_size * 1.5  # Distance to see entire motion
-        camera_height = motion_bbox_center.z + motion_size.z * 0.3  # Slightly elevated
-        
-        # Position camera on the side (positive X) with slight front angle
-        # Mostly side view, but slightly forward to see the front
-        side_offset = camera_distance * 0.8  # Mostly to the side
-        front_offset = camera_distance * 0.3  # Slight front angle
-        cam_x = motion_bbox_center.x + side_offset  # To the right side
-        cam_y = motion_bbox_min.y - front_offset  # Slightly in front (negative Y)
-        cam_z = camera_height
-        
-        cam.location = (cam_x, cam_y, cam_z)
-        
-        # Point camera at motion center (not just starting position)
-        direction = motion_bbox_center - cam.location
-        rot_quat = direction.to_track_quat("-Z", "Y")
-        cam.rotation_euler = rot_quat.to_euler()
-        
-        cam.data.lens = 35  # Standard lens
-        cam.data.dof.use_dof = True
-        cam.data.dof.focus_distance = direction.length
-        cam.data.dof.aperture_fstop = 4.0
-        
-        print(f"[Blender Script] Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f})")
-        print(f"[Blender Script] Camera pointing at motion center ({motion_bbox_center.x:.3f}, {motion_bbox_center.y:.3f}, {motion_bbox_center.z:.3f})")
         print(f"[Blender Script] Camera is STATIC (no movement during animation)")
     else:
         # Fallback to default camera position
@@ -696,6 +815,11 @@ if __name__ == "__main__":
         default=None,
         help="If set, creates a static composite image with N evenly-spaced frames visible at once with gradient colors. Overrides animation rendering."
     )
+    parser.add_argument(
+        "--separate",
+        action="store_true",
+        help="When used with --composite_frames, places poses in equally spaced regions on the floor, removing global location information."
+    )
     
     # Parse arguments after -- separator (like reference code)
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else sys.argv[1:]
@@ -722,4 +846,5 @@ if __name__ == "__main__":
         cinematic_dolly=args.cinematic_dolly,
         max_frames=args.max_frames,
         composite_frames=args.composite_frames,
+        separate=args.separate,
     )

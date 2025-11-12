@@ -74,6 +74,11 @@ if __name__ == "__main__":
         default=None,
         help="If set, creates a static composite image with N evenly-spaced frames visible at once with gradient colors. Overrides animation rendering."
     )
+    parser.add_argument(
+        "--separate",
+        action="store_true",
+        help="When used with --composite_frames, places poses in equally spaced regions on the floor, removing global location information."
+    )
     args = parser.parse_args()
 
     print(f"[Python Wrapper] Starting render_human_animation.py")
@@ -87,6 +92,7 @@ if __name__ == "__main__":
     print(f"  - Cinematic dolly: {args.cinematic_dolly}")
     print(f"  - Max frames: {args.max_frames if args.max_frames else 'All'}")
     print(f"  - Composite frames: {args.composite_frames if args.composite_frames else 'None (animation mode)'}")
+    print(f"  - Separate mode: {args.separate}")
 
     obj_dir = args.obj_dir
 
@@ -142,6 +148,9 @@ if __name__ == "__main__":
     
     if args.composite_frames is not None:
         blender_args += f" --composite_frames {args.composite_frames}"
+    
+    if args.separate:
+        blender_args += " --separate"
 
     command = f"/snap/blender/current/blender --background --python {shlex.quote(blender_script_path)} -- {blender_args}"
     full_command = f"export DISPLAY=:0.0 && {command}"
