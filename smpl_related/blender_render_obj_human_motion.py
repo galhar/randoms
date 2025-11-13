@@ -194,6 +194,9 @@ def render_human_animation(
     max_frames: int = None,
     composite_frames: int = None,
     separate: bool = False,
+    start_frame: int = 0,
+    spacing: float = None,
+    camera_position: str = "right",
 ) -> None:
     """Renders a human animation from OBJ sequence files.
     
@@ -230,7 +233,8 @@ def render_human_animation(
         scene.view_layers[0].use_pass_vector = True
     except:
         pass
-    scene.render.film_transparent = False
+    # Enable transparent background for article figures (especially in composite mode)
+    scene.render.film_transparent = True
     scene.frame_current = 1
     scene.render.resolution_x = resolution[0]
     scene.render.resolution_y = resolution[1]
@@ -252,6 +256,13 @@ def render_human_animation(
         raise ValueError(f"No OBJ files matching {file_prefix}*.obj in {obj_dir}")
 
     files.sort(key=natural_key)
+    
+    # Apply start_frame offset
+    if start_frame > 0:
+        if start_frame >= len(files):
+            raise ValueError(f"start_frame ({start_frame}) is greater than or equal to total number of files ({len(files)})")
+        files = files[start_frame:]
+        print(f"[Blender Script] Starting from frame {start_frame}, {len(files)} files remaining")
     
     # Handle composite mode: select evenly-spaced frames
     if is_composite_mode:
@@ -423,16 +434,21 @@ def render_human_animation(
         
         # Calculate spacing for equally spaced positions
         n_objects = len(imported_objects)
-        if n_objects == 1:
-            spacing = 2.0  # Default spacing for single object
+        if spacing is None:
+            # Auto-calculate spacing if not provided
+            if n_objects == 1:
+                spacing = 2.0  # Default spacing for single object
+            else:
+                # Estimate spacing based on average object size
+                avg_size = 0.0
+                for bbox_min, bbox_max in object_local_bboxes:
+                    size = max(bbox_max.x - bbox_min.x, bbox_max.y - bbox_min.y)
+                    avg_size += size
+                avg_size /= n_objects
+                spacing = max(avg_size * 1.0, 0.5)
+            print(f"[Blender Script] Auto-calculated spacing: {spacing:.3f}")
         else:
-            # Estimate spacing based on average object size
-            avg_size = 0.0
-            for bbox_min, bbox_max in object_local_bboxes:
-                size = max(bbox_max.x - bbox_min.x, bbox_max.y - bbox_min.y)
-                avg_size += size
-            avg_size /= n_objects
-            spacing = max(avg_size * 1.0, 1.0)  # Closer spacing: multiplier 1.0, minimum 1.0 units
+            print(f"[Blender Script] Using user-specified spacing: {spacing:.3f}")
         
         # Arrange objects in a line along X axis, equally spaced
         total_width = spacing * (n_objects - 1) if n_objects > 1 else spacing
@@ -465,7 +481,7 @@ def render_human_animation(
     # ----------------------- Lighting / World -----------------
     print(f"[Blender Script] Setting up lighting...")
     
-    # Set up world with white background
+    # Set up world with transparent background for article figures
     world = bpy.data.worlds.get("World") or bpy.data.worlds.new("World")
     scene.world = world
     world.use_nodes = True
@@ -478,16 +494,18 @@ def render_human_animation(
     if use_hdri and hdri_path and os.path.isfile(hdri_path):
         w_env = wnodes.new("ShaderNodeTexEnvironment")
         w_env.image = bpy.data.images.load(hdri_path)
-        w_bg.inputs["Strength"].default_value = 1.2
+        # For transparent background, set strength to 0 so HDRI only provides lighting, not background
+        w_bg.inputs["Strength"].default_value = 0.0
         wlinks.new(w_env.outputs["Color"], w_bg.inputs["Color"])
         wlinks.new(w_bg.outputs["Background"], w_output.inputs["Surface"])
-        print(f"[Blender Script] HDRI lighting enabled")
+        print(f"[Blender Script] HDRI lighting enabled (transparent background)")
     else:
-        # White background
-        w_bg.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)  # White
-        w_bg.inputs["Strength"].default_value = 1.0
+        # Transparent background: set strength to 0 so background is transparent
+        # The lights will still illuminate the objects
+        w_bg.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)  # White (not used when strength is 0)
+        w_bg.inputs["Strength"].default_value = 0.0  # Zero strength = transparent background
         wlinks.new(w_bg.outputs["Background"], w_output.inputs["Surface"])
-        print(f"[Blender Script] White background set")
+        print(f"[Blender Script] Transparent background set (lights will still illuminate objects)")
         
         # Three-point light rig
         def add_light(name, type, energy, loc, rot):
@@ -583,14 +601,25 @@ def render_human_animation(
             ))
             
             # Camera should be positioned to see the entire line of objects
-            # Position at an angle: more in front, less to the side, and farther away
             camera_distance = max(motion_size.x * 1.2, 4.5)  # Farther distance based on width, minimum 4.5 units
             camera_height = motion_bbox_center.z + motion_size.z * 0.3  # Slightly elevated to see poses clearly
             
-            # Position camera: less to the side, more in front (but a bit backward)
-            cam_x = motion_bbox_center.x + camera_distance * 0.3  # Less to the right side
-            cam_y = motion_bbox_center.y - camera_distance * 0.9  # A bit backward from previous position
-            cam_z = camera_height
+            # Position camera based on camera_position option
+            if camera_position == "front":
+                # Camera directly in front (centered on X, negative Y)
+                cam_x = motion_bbox_center.x  # Centered on X
+                cam_y = motion_bbox_center.y - camera_distance * 1.0  # Directly in front (negative Y)
+                cam_z = camera_height
+            elif camera_position == "left":
+                # Camera from the left side (negative X)
+                cam_x = motion_bbox_center.x - camera_distance * 0.8  # To the left side
+                cam_y = motion_bbox_center.y - camera_distance * 0.3  # Slightly in front
+                cam_z = camera_height
+            else:  # "right" (default)
+                # Camera from the right side (positive X)
+                cam_x = motion_bbox_center.x + camera_distance * 0.3  # To the right side
+                cam_y = motion_bbox_center.y - camera_distance * 0.9  # A bit backward
+                cam_z = camera_height
             
             cam.location = (cam_x, cam_y, cam_z)
             
@@ -604,7 +633,7 @@ def render_human_animation(
             cam.data.dof.focus_distance = direction.length
             cam.data.dof.aperture_fstop = 4.0
             
-            print(f"[Blender Script] SEPARATE MODE: Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f})")
+            print(f"[Blender Script] SEPARATE MODE: Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f}) from {camera_position} side")
             print(f"[Blender Script] Camera pointing at center ({motion_bbox_center.x:.3f}, {motion_bbox_center.y:.3f}, {motion_bbox_center.z:.3f})")
         else:
             # Normal composite or animation mode
@@ -619,18 +648,29 @@ def render_human_animation(
             ))
             diagonal_size = math.sqrt(motion_size.x**2 + motion_size.y**2 + motion_size.z**2)
             
-            # Position camera on the side, slightly angled to see the front
-            # Camera should be mostly on the side but with a slight front angle
+            # Position camera based on camera_position option
             camera_distance = diagonal_size * 1.5  # Distance to see entire motion
             camera_height = motion_bbox_center.z + motion_size.z * 0.3  # Slightly elevated
             
-            # Position camera on the side (positive X) with slight front angle
-            # Mostly side view, but slightly forward to see the front
-            side_offset = camera_distance * 0.8  # Mostly to the side
-            front_offset = camera_distance * 0.3  # Slight front angle
-            cam_x = motion_bbox_center.x + side_offset  # To the right side
-            cam_y = motion_bbox_min.y - front_offset  # Slightly in front (negative Y)
-            cam_z = camera_height
+            if camera_position == "front":
+                # Camera directly in front (centered on X, negative Y)
+                cam_x = motion_bbox_center.x  # Centered on X
+                cam_y = motion_bbox_min.y - camera_distance * 0.8  # Directly in front (negative Y)
+                cam_z = camera_height
+            elif camera_position == "left":
+                # Camera from the left side (negative X)
+                side_offset = camera_distance * 0.8  # Mostly to the side
+                front_offset = camera_distance * 0.3  # Slight front angle
+                cam_x = motion_bbox_center.x - side_offset  # To the left side
+                cam_y = motion_bbox_min.y - front_offset  # Slightly in front (negative Y)
+                cam_z = camera_height
+            else:  # "right" (default)
+                # Camera from the right side (positive X) with slight front angle
+                side_offset = camera_distance * 0.8  # Mostly to the side
+                front_offset = camera_distance * 0.3  # Slight front angle
+                cam_x = motion_bbox_center.x + side_offset  # To the right side
+                cam_y = motion_bbox_min.y - front_offset  # Slightly in front (negative Y)
+                cam_z = camera_height
             
             cam.location = (cam_x, cam_y, cam_z)
             
@@ -644,7 +684,7 @@ def render_human_animation(
             cam.data.dof.focus_distance = direction.length
             cam.data.dof.aperture_fstop = 4.0
             
-            print(f"[Blender Script] Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f})")
+            print(f"[Blender Script] Camera positioned at ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f}) from {camera_position} side")
             print(f"[Blender Script] Camera pointing at motion center ({motion_bbox_center.x:.3f}, {motion_bbox_center.y:.3f}, {motion_bbox_center.z:.3f})")
         
         print(f"[Blender Script] Camera is STATIC (no movement during animation)")
@@ -820,6 +860,25 @@ if __name__ == "__main__":
         action="store_true",
         help="When used with --composite_frames, places poses in equally spaced regions on the floor, removing global location information."
     )
+    parser.add_argument(
+        "--start_frame",
+        type=int,
+        default=0,
+        help="Frame index to start from (0-based, default: 0)."
+    )
+    parser.add_argument(
+        "--spacing",
+        type=float,
+        default=None,
+        help="Spacing between objects in separate mode (default: auto-calculated based on object size)."
+    )
+    parser.add_argument(
+        "--camera_position",
+        type=str,
+        default="right",
+        choices=["left", "right", "front"],
+        help="Camera position: 'left', 'right' (default), or 'front' (directly in front of the floor)."
+    )
     
     # Parse arguments after -- separator (like reference code)
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else sys.argv[1:]
@@ -847,4 +906,7 @@ if __name__ == "__main__":
         max_frames=args.max_frames,
         composite_frames=args.composite_frames,
         separate=args.separate,
+        start_frame=args.start_frame,
+        spacing=args.spacing,
+        camera_position=args.camera_position,
     )

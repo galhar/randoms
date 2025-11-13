@@ -79,6 +79,25 @@ if __name__ == "__main__":
         action="store_true",
         help="When used with --composite_frames, places poses in equally spaced regions on the floor, removing global location information."
     )
+    parser.add_argument(
+        "--start_frame",
+        type=int,
+        default=0,
+        help="Frame index to start from (0-based, default: 0)."
+    )
+    parser.add_argument(
+        "--spacing",
+        type=float,
+        default=None,
+        help="Spacing between objects in separate mode (default: auto-calculated based on object size)."
+    )
+    parser.add_argument(
+        "--camera_position",
+        type=str,
+        default="right",
+        choices=["left", "right", "front"],
+        help="Camera position: 'left', 'right' (default), or 'front' (directly in front of the floor)."
+    )
     args = parser.parse_args()
 
     print(f"[Python Wrapper] Starting render_human_animation.py")
@@ -93,6 +112,9 @@ if __name__ == "__main__":
     print(f"  - Max frames: {args.max_frames if args.max_frames else 'All'}")
     print(f"  - Composite frames: {args.composite_frames if args.composite_frames else 'None (animation mode)'}")
     print(f"  - Separate mode: {args.separate}")
+    print(f"  - Start frame: {args.start_frame}")
+    print(f"  - Spacing: {args.spacing if args.spacing is not None else 'Auto-calculated'}")
+    print(f"  - Camera position: {args.camera_position}")
 
     obj_dir = args.obj_dir
 
@@ -151,6 +173,15 @@ if __name__ == "__main__":
     
     if args.separate:
         blender_args += " --separate"
+    
+    if args.start_frame != 0:
+        blender_args += f" --start_frame {args.start_frame}"
+    
+    if args.spacing is not None:
+        blender_args += f" --spacing {args.spacing}"
+    
+    if args.camera_position != "right":
+        blender_args += f" --camera_position {args.camera_position}"
 
     command = f"/snap/blender/current/blender --background --python {shlex.quote(blender_script_path)} -- {blender_args}"
     full_command = f"export DISPLAY=:0.0 && {command}"
