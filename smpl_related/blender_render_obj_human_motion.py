@@ -610,6 +610,11 @@ def render_human_animation(
                 cam_x = motion_bbox_center.x  # Centered on X
                 cam_y = motion_bbox_center.y - camera_distance * 1.0  # Directly in front (negative Y)
                 cam_z = camera_height
+            elif camera_position == "up":
+                # Camera directly in front but more elevated (centered on X, negative Y, higher Z)
+                cam_x = motion_bbox_center.x  # Centered on X
+                cam_y = motion_bbox_center.y - camera_distance * 1.0  # Directly in front (negative Y)
+                cam_z = camera_height + motion_size.z * 1.2  # More elevated than front
             elif camera_position == "left":
                 # Camera from the left side (negative X)
                 cam_x = motion_bbox_center.x - camera_distance * 0.8  # To the left side
@@ -657,6 +662,11 @@ def render_human_animation(
                 cam_x = motion_bbox_center.x  # Centered on X
                 cam_y = motion_bbox_min.y - camera_distance * 0.8  # Directly in front (negative Y)
                 cam_z = camera_height
+            elif camera_position == "up":
+                # Camera directly in front but more elevated (centered on X, negative Y, higher Z)
+                cam_x = motion_bbox_center.x  # Centered on X
+                cam_y = motion_bbox_min.y - camera_distance * 0.8  # Directly in front (negative Y)
+                cam_z = camera_height + motion_size.z * 1.2  # More elevated than front
             elif camera_position == "left":
                 # Camera from the left side (negative X)
                 side_offset = camera_distance * 0.8  # Mostly to the side
@@ -876,8 +886,8 @@ if __name__ == "__main__":
         "--camera_position",
         type=str,
         default="right",
-        choices=["left", "right", "front"],
-        help="Camera position: 'left', 'right' (default), or 'front' (directly in front of the floor)."
+        choices=["left", "right", "front", "up"],
+        help="Camera position: 'left', 'right' (default), 'front' (directly in front), or 'up' (front view from higher elevation)."
     )
     
     # Parse arguments after -- separator (like reference code)
