@@ -233,8 +233,9 @@ def render_human_animation(
         scene.view_layers[0].use_pass_vector = True
     except:
         pass
-    # Enable transparent background for article figures (especially in composite mode)
-    scene.render.film_transparent = True
+    # Enable transparent background only for composite mode (for article figures)
+    # For animation mode, use white background
+    scene.render.film_transparent = is_composite_mode
     scene.frame_current = 1
     scene.render.resolution_x = resolution[0]
     scene.render.resolution_y = resolution[1]
@@ -494,18 +495,30 @@ def render_human_animation(
     if use_hdri and hdri_path and os.path.isfile(hdri_path):
         w_env = wnodes.new("ShaderNodeTexEnvironment")
         w_env.image = bpy.data.images.load(hdri_path)
-        # For transparent background, set strength to 0 so HDRI only provides lighting, not background
-        w_bg.inputs["Strength"].default_value = 0.0
+        if is_composite_mode:
+            # For transparent background, set strength to 0 so HDRI only provides lighting, not background
+            w_bg.inputs["Strength"].default_value = 0.0
+            print(f"[Blender Script] HDRI lighting enabled (transparent background)")
+        else:
+            # For animation mode, use HDRI as background
+            w_bg.inputs["Strength"].default_value = 1.0
+            print(f"[Blender Script] HDRI lighting enabled (with HDRI background)")
         wlinks.new(w_env.outputs["Color"], w_bg.inputs["Color"])
         wlinks.new(w_bg.outputs["Background"], w_output.inputs["Surface"])
-        print(f"[Blender Script] HDRI lighting enabled (transparent background)")
     else:
-        # Transparent background: set strength to 0 so background is transparent
-        # The lights will still illuminate the objects
-        w_bg.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)  # White (not used when strength is 0)
-        w_bg.inputs["Strength"].default_value = 0.0  # Zero strength = transparent background
-        wlinks.new(w_bg.outputs["Background"], w_output.inputs["Surface"])
-        print(f"[Blender Script] Transparent background set (lights will still illuminate objects)")
+        if is_composite_mode:
+            # Transparent background: set strength to 0 so background is transparent
+            # The lights will still illuminate the objects
+            w_bg.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)  # White (not used when strength is 0)
+            w_bg.inputs["Strength"].default_value = 0.0  # Zero strength = transparent background
+            wlinks.new(w_bg.outputs["Background"], w_output.inputs["Surface"])
+            print(f"[Blender Script] Transparent background set (lights will still illuminate objects)")
+        else:
+            # Animation mode: white background
+            w_bg.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)  # White
+            w_bg.inputs["Strength"].default_value = 1.0  # Full strength = white background
+            wlinks.new(w_bg.outputs["Background"], w_output.inputs["Surface"])
+            print(f"[Blender Script] White background set for animation mode")
         
         # Three-point light rig
         def add_light(name, type, energy, loc, rot):

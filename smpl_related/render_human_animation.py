@@ -183,7 +183,7 @@ if __name__ == "__main__":
     if args.camera_position != "right":
         blender_args += f" --camera_position {args.camera_position}"
 
-    command = f"/snap/blender/current/blender --background --python {shlex.quote(blender_script_path)} -- {blender_args}"
+    command = f"/snap/blender/6728/blender --background --python {shlex.quote(blender_script_path)} -- {blender_args}"
     full_command = f"export DISPLAY=:0.0 && {command}"
 
     # Render the animation, capturing output
