@@ -98,6 +98,18 @@ if __name__ == "__main__":
         choices=["left", "right", "front", "up"],
         help="Camera position: 'left', 'right' (default), 'front' (directly in front), or 'up' (front view from higher elevation)."
     )
+    parser.add_argument(
+        "--floor_position",
+        type=str,
+        default="lowest_vertex_first_frame",
+        choices=["lowest_vertex_first_frame", "zero", "force_touch_all_frames"],
+        help="How to place the floor: lowest vertex of first frame (default), force every frame to touch, or pin floor at z=0."
+    )
+    parser.add_argument(
+        "--independent_of_motion_view",
+        action="store_true",
+        help="Use an oversized square floor instead of motion-sized floor."
+    )
     args = parser.parse_args()
 
     print(f"[Python Wrapper] Starting render_human_animation.py")
@@ -115,6 +127,8 @@ if __name__ == "__main__":
     print(f"  - Start frame: {args.start_frame}")
     print(f"  - Spacing: {args.spacing if args.spacing is not None else 'Auto-calculated'}")
     print(f"  - Camera position: {args.camera_position}")
+    print(f"  - Floor position mode: {args.floor_position}")
+    print(f"  - Independent of motion view: {args.independent_of_motion_view}")
 
     obj_dir = args.obj_dir
 
@@ -182,8 +196,14 @@ if __name__ == "__main__":
     
     if args.camera_position != "right":
         blender_args += f" --camera_position {args.camera_position}"
+    
+    if args.floor_position != "lowest_vertex_first_frame":
+        blender_args += f" --floor_position {args.floor_position}"
+    
+    if args.independent_of_motion_view:
+        blender_args += " --independent_of_motion_view"
 
-    command = f"/snap/blender/6728/blender --background --python {shlex.quote(blender_script_path)} -- {blender_args}"
+    command = f"/snap/blender/6807/blender --background --python {shlex.quote(blender_script_path)} -- {blender_args}"
     full_command = f"export DISPLAY=:0.0 && {command}"
 
     # Render the animation, capturing output

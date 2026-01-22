@@ -27,6 +27,25 @@ def purge_scene():
         if w.users == 0 and w.name != "World": 
             bpy.data.worlds.remove(w)
 
+def raise_object_to_floor(obj, eps: float = 1e-5) -> float:
+    """Translate object vertically so its lowest vertex sits on z=0.
+    
+    Returns the applied offset (positive = moved up, negative = moved down).
+    """
+    bbox_min = Vector((math.inf, math.inf, math.inf))
+    for coord in obj.bound_box:
+        world_coord = obj.matrix_world @ Vector(coord)
+        bbox_min = Vector((
+            min(bbox_min.x, world_coord.x),
+            min(bbox_min.y, world_coord.y),
+            min(bbox_min.z, world_coord.z),
+        ))
+    if abs(bbox_min.z) <= eps:
+        return 0.0
+    offset = -bbox_min.z
+    obj.location.z += offset
+    return offset
+
 def get_scene_bbox(objects=None):
     """Calculate bounding box of given objects or all mesh objects in scene.
     
@@ -191,6 +210,8 @@ def render_human_animation(
     use_hdri: bool,
     hdri_path: str,
     cinematic_dolly: bool,
+    floor_position: str = "lowest_vertex_first_frame",
+    independent_of_motion_view: bool = False,
     max_frames: int = None,
     composite_frames: int = None,
     separate: bool = False,
@@ -209,13 +230,15 @@ def render_human_animation(
         use_hdri: Whether to use HDRI lighting
         hdri_path: Path to HDRI file (if use_hdri is True)
         cinematic_dolly: Whether to enable camera dolly
+        floor_position: One of ['lowest_vertex_first_frame', 'zero', 'force_touch_all_frames']
+        independent_of_motion_view: If True, use a very large square floor regardless of motion size
         max_frames: Maximum number of frames to process (None for all)
         composite_frames: If set, creates static composite with N evenly-spaced frames
     """
     is_composite_mode = composite_frames is not None and composite_frames > 0
     is_separate_mode = is_composite_mode and separate
     print(f"[Blender Script] Starting render_human_animation function")
-    print(f"[Blender Script] Parameters: obj_dir={obj_dir}, prefix={file_prefix}, fps={fps}, resolution={resolution}, max_frames={max_frames}, composite_frames={composite_frames}, separate={separate}")
+    print(f"[Blender Script] Parameters: obj_dir={obj_dir}, prefix={file_prefix}, fps={fps}, resolution={resolution}, max_frames={max_frames}, composite_frames={composite_frames}, separate={separate}, floor_position={floor_position}, independent_of_motion_view={independent_of_motion_view}")
     if is_composite_mode:
         if is_separate_mode:
             print(f"[Blender Script] SEPARATE MODE: Will create static image with {composite_frames} evenly-spaced frames placed on floor in equally spaced regions")
@@ -293,6 +316,7 @@ def render_human_animation(
     bpy.context.scene.collection.children.link(seq_coll)
 
     imported_objects = []
+    first_frame_lowest_z = None
 
     print(f"[Blender Script] Starting to import {n_frames} OBJ files...")
     for i, fname in enumerate(files, start=1):  # frames start at 1
@@ -311,6 +335,32 @@ def render_human_animation(
         else:
             obj = sel[0]
         obj.name = f"motion_{i:04d}"
+        
+        # Debug: Print bounding box and location of first imported object to diagnose coordinate issues
+        if i == 1:
+            bbox_min = Vector((math.inf, math.inf, math.inf))
+            bbox_max = Vector((-math.inf, -math.inf, -math.inf))
+            for coord in obj.bound_box:
+                coord = Vector(coord)
+                world_coord = obj.matrix_world @ coord
+                bbox_min = Vector((min(bbox_min.x, world_coord.x), min(bbox_min.y, world_coord.y), min(bbox_min.z, world_coord.z)))
+                bbox_max = Vector((max(bbox_max.x, world_coord.x), max(bbox_max.y, world_coord.y), max(bbox_max.z, world_coord.z)))
+            print(f"[Blender Script] DEBUG: First object after import:")
+            print(f"  - Bounding box min: ({bbox_min.x:.3f}, {bbox_min.y:.3f}, {bbox_min.z:.3f})")
+            print(f"  - Bounding box max: ({bbox_max.x:.3f}, {bbox_max.y:.3f}, {bbox_max.z:.3f})")
+            print(f"  - Object location: ({obj.location.x:.3f}, {obj.location.y:.3f}, {obj.location.z:.3f})")
+            print(f"  - Object scale: ({obj.scale.x:.3f}, {obj.scale.y:.3f}, {obj.scale.z:.3f})")
+            print(f"  - Note: In Blender, Z is the vertical axis. If mesh should be above y=0 in SMPL, check if Z is positive here.")
+            first_frame_lowest_z = bbox_min.z
+        
+        # Optionally shift object vertically so its lowest point sits on z=0 (affects all frames)
+        height_adjustment = 0.0
+        if floor_position == "force_touch_all_frames":
+            height_adjustment = raise_object_to_floor(obj)
+            if abs(height_adjustment) > 0:
+                print(f"[Blender Script] Frame {i}: applied vertical offset {height_adjustment:.4f} to touch floor")
+            else:
+                print(f"[Blender Script] Frame {i}: already touching floor (no offset applied)")
         # Put into collection
         for c in obj.users_collection:
             c.objects.unlink(obj)
@@ -555,11 +605,26 @@ def render_human_animation(
         motion_size_x = motion_bbox_max.x - motion_bbox_min.x
         motion_size_y = motion_bbox_max.y - motion_bbox_min.y
         padding = 0.5  # Add 0.5 units padding on each side
+        # floor_size_x = 10 if independent_of_motion_view else motion_size_x + 2 * padding
+        # floor_size_y = 10 if independent_of_motion_view else motion_size_y + 2 * padding
         floor_size_x = motion_size_x + 2 * padding
         floor_size_y = motion_size_y + 2 * padding
+        if independent_of_motion_view: 
+            if floor_size_x > floor_size_y * 2/3:
+                floor_size_y = floor_size_x * 3 / 2
+            else:
+                floor_size_x = floor_size_y * 2 / 3
         
         # Position floor exactly at the lowest point of the feet
-        floor_z = motion_bbox_min.z
+        if floor_position == "zero" or floor_position == "force_touch_all_frames":
+            floor_z = 0.0
+        elif floor_position == "lowest_vertex_first_frame" and first_frame_lowest_z is not None:
+            floor_z = first_frame_lowest_z
+        else:
+            floor_z = motion_bbox_min.z if motion_bbox_min is not None else 0.0
+        print(f"[Blender Script] floor_z chosen by mode '{floor_position}' is {floor_z:.3f}")
+        # floor_center_x = 0 if independent_of_motion_view else (motion_bbox_min.x + motion_bbox_max.x) / 2
+        # floor_center_y = 0 if independent_of_motion_view else (motion_bbox_min.y + motion_bbox_max.y) / 2
         floor_center_x = (motion_bbox_min.x + motion_bbox_max.x) / 2
         floor_center_y = (motion_bbox_min.y + motion_bbox_max.y) / 2
         
@@ -668,7 +733,10 @@ def render_human_animation(
             
             # Position camera based on camera_position option
             camera_distance = diagonal_size * 1.5  # Distance to see entire motion
-            camera_height = motion_bbox_center.z + motion_size.z * 0.3  # Slightly elevated
+            if independent_of_motion_view:
+                camera_height = diagonal_size * 0.3
+            else:
+                camera_height = motion_bbox_center.z + motion_size.z * 0.3
             
             if camera_position == "front":
                 # Camera directly in front (centered on X, negative Y)
@@ -695,9 +763,11 @@ def render_human_animation(
                 cam_y = motion_bbox_min.y - front_offset  # Slightly in front (negative Y)
                 cam_z = camera_height
             
+            # cam.location = (-7,-7,floor_z+1.5) if independent_of_motion_view else (cam_x, cam_y, cam_z)
             cam.location = (cam_x, cam_y, cam_z)
             
             # Point camera at motion center (not just starting position)
+            # direction = Vector((0.0, 0.0, floor_z)) - cam.location if independent_of_motion_view else motion_bbox_center - cam.location
             direction = motion_bbox_center - cam.location
             rot_quat = direction.to_track_quat("-Z", "Y")
             cam.rotation_euler = rot_quat.to_euler()
@@ -902,6 +972,18 @@ if __name__ == "__main__":
         choices=["left", "right", "front", "up"],
         help="Camera position: 'left', 'right' (default), 'front' (directly in front), or 'up' (front view from higher elevation)."
     )
+    parser.add_argument(
+        "--floor_position",
+        type=str,
+        default="lowest_vertex_first_frame",
+        choices=["lowest_vertex_first_frame", "zero", "force_touch_all_frames"],
+        help="Floor placement: lowest vertex of first frame (default), keep at z=0, or force every frame to touch z=0."
+    )
+    parser.add_argument(
+        "--independent_of_motion_view",
+        action="store_true",
+        help="Use a very large square floor instead of motion-sized floor."
+    )
     
     # Parse arguments after -- separator (like reference code)
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else sys.argv[1:]
@@ -926,6 +1008,8 @@ if __name__ == "__main__":
         use_hdri=args.use_hdri,
         hdri_path=args.hdri_path,
         cinematic_dolly=args.cinematic_dolly,
+        floor_position=args.floor_position,
+        independent_of_motion_view=args.independent_of_motion_view,
         max_frames=args.max_frames,
         composite_frames=args.composite_frames,
         separate=args.separate,
