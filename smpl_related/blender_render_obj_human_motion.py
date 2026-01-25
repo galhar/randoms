@@ -838,6 +838,13 @@ def render_human_animation(
         print(f"[Blender Script] - Resolution: {resolution[0]}x{resolution[1]}")
         print(f"[Blender Script] - All frames visible with gradient colors")
         print(f"[Blender Script] ========================================")
+        
+        # Save Blender file before rendering (for artist to continue work)
+        blend_output_path = output_path.rsplit('.', 1)[0] + '.blend'
+        print(f"[Blender Script] Saving Blender file to: {blend_output_path}")
+        bpy.ops.wm.save_as_mainfile(filepath=blend_output_path)
+        print(f"[Blender Script] Blender file saved successfully")
+        
         print(f"[Blender Script] Starting single frame render...")
         
         # Render single frame
