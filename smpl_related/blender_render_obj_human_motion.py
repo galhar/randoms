@@ -1,10 +1,12 @@
 """Blender script to render human animation from OBJ sequence files."""
 
+from typing import Literal
 import argparse
 import os
 import re
 import math
 import sys
+import colorsys
 
 import bpy
 from mathutils import Vector
@@ -154,7 +156,7 @@ def get_evenly_spaced_indices(total_frames: int, n_frames: int) -> list:
     indices = [min(idx, total_frames - 1) for idx in indices]
     return indices
 
-def apply_gradient_colors(objects: list, start_color: tuple = (0.2, 0.4, 0.8, 1.0), end_color: tuple = (0.8, 0.4, 0.2, 1.0)):
+def apply_gradient_colors(objects: list, start_color: tuple[float, ...] = (0.2, 0.4, 0.8, 1.0), end_color: tuple[float, ...] = (0.8, 0.4, 0.2, 1.0), color_space: Literal['rgb', 'hls', 'hsv'] = 'rgb'):
     """Apply gradually alternating colors to a list of objects.
     
     Args:
@@ -175,6 +177,11 @@ def apply_gradient_colors(objects: list, start_color: tuple = (0.2, 0.4, 0.8, 1.
             start_color[j] * (1 - t) + end_color[j] * t
             for j in range(4)
         )
+
+        if color_space == 'hls':
+            color = (*colorsys.hls_to_rgb(color[0], color[1], color[2]), color[3])
+        elif color_space == 'hsv':
+            color = (*colorsys.hsv_to_rgb(color[0], color[1], color[2]), color[3])
         
         # Create material for this object
         mat = bpy.data.materials.new(name=f"GradientMat_{i:04d}")
@@ -218,6 +225,7 @@ def render_human_animation(
     start_frame: int = 0,
     spacing: float = None,
     camera_position: str = "right",
+    checkerboard_ground: bool = False
 ) -> None:
     """Renders a human animation from OBJ sequence files.
     
@@ -408,8 +416,9 @@ def render_human_animation(
         print(f"[Blender Script] Applying gradient colors to {len(imported_objects)} objects...")
         apply_gradient_colors(
             imported_objects,
-            start_color=(0.2, 0.1, 0.0, 1.0),   # Very dark orange (increased range)
-            end_color=(1.0, 0.6, 0.2, 1.0)      # Bright orange
+            start_color=(0.03, 0.5, 0.98, 1.0), # orange
+            end_color=(0.1, 0.4, 0.88, 1.0), # muted yellow
+            color_space='hls'
         )
         print(f"[Blender Script] Gradient colors applied (orange with increasing brightness)")
     else:
@@ -571,17 +580,19 @@ def render_human_animation(
             print(f"[Blender Script] White background set for animation mode")
         
         # Three-point light rig
-        def add_light(name, type, energy, loc, rot):
+        def add_light(name, type, energy, loc, rot, size=None):
             light_data = bpy.data.lights.new(name=name, type=type)
             light_data.energy = energy
+            if size is not None:
+                light_data.size = size
             light = bpy.data.objects.new(name, light_data)
             scene.collection.objects.link(light)
             light.location = loc
             light.rotation_euler = rot
             return light
-        add_light("Key",  'AREA', 1200, (3.0, -3.0, 3.0), (math.radians(55), 0, math.radians(35)))
-        add_light("Fill", 'AREA', 400, (-3.0, -1.0, 2.0), (math.radians(70), 0, math.radians(-15)))
-        add_light("Rim",  'SPOT', 1500, (0.0, 3.5, 2.5), (math.radians(200), 0, 0))
+        add_light("Left",  'AREA', 800, (3.0, -3.0, 3.0), (math.radians(70), 0, math.radians(15)), size=14)
+        add_light("Right", 'AREA', 800, (-3.0, -3.0, 3.0), (math.radians(70), 0, math.radians(-15)), size=14)
+        add_light("Sun", 'SUN', 6, (0.0, 0.0, 0.0), (math.radians(40), math.radians(10), math.radians(6)))
         print(f"[Blender Script] Three-point light rig created")
 
     # ----------------------- Calculate motion bounding box ------------------
@@ -627,6 +638,8 @@ def render_human_animation(
         # floor_center_y = 0 if independent_of_motion_view else (motion_bbox_min.y + motion_bbox_max.y) / 2
         floor_center_x = (motion_bbox_min.x + motion_bbox_max.x) / 2
         floor_center_y = (motion_bbox_min.y + motion_bbox_max.y) / 2
+
+        floor_center_y += 0.3 # push the floor back a bit
         
         print(f"[Blender Script] Floor size: {floor_size_x:.3f} x {floor_size_y:.3f}, center=({floor_center_x:.3f}, {floor_center_y:.3f}, {floor_z:.3f})")
         
@@ -651,8 +664,18 @@ def render_human_animation(
     ground_mat.use_nodes = True
     g_nodes = ground_mat.node_tree.nodes
     g_nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.9
-    g_nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.05,0.05,0.05,1)
+    g_nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.3,0.3,0.3,1)
     ground.data.materials.append(ground_mat)
+    if checkerboard_ground:
+        g_bsdf = g_nodes["Principled BSDF"]
+        g_checker = g_nodes.new('ShaderNodeTexChecker')
+        g_checker.inputs['Color1'].default_value = (0.5,0.5,0.5,1.0)
+        g_checker.inputs['Scale'].default_value = 3.0
+        g_geometry = g_nodes.new('ShaderNodeNewGeometry')
+        g_links = ground_mat.node_tree.links
+        g_links.new(g_geometry.outputs['Position'], g_checker.inputs['Vector'])
+        g_links.new(g_checker.outputs['Color'], g_bsdf.inputs['Base Color'])
+
     print(f"[Blender Script] Ground plane created")
 
     # ----------------------- Camera ---------------------------
@@ -680,15 +703,18 @@ def render_human_animation(
             
             # Camera should be positioned to see the entire line of objects
             camera_distance = max(motion_size.x * 1.2, 4.5)  # Farther distance based on width, minimum 4.5 units
+            # camera_height = motion_bbox_center.z + motion_size.z * 1.5  # Slightly elevated to see poses clearly
             camera_height = motion_bbox_center.z + motion_size.z * 0.3  # Slightly elevated to see poses clearly
             
             # Position camera based on camera_position option
             if camera_position == "front":
+                camera_height = motion_bbox_center.z + motion_size.z * 1.5  # Yuval Adjustment
                 # Camera directly in front (centered on X, negative Y)
                 cam_x = motion_bbox_center.x  # Centered on X
                 cam_y = motion_bbox_center.y - camera_distance * 1.0  # Directly in front (negative Y)
                 cam_z = camera_height
             elif camera_position == "up":
+                camera_height = motion_bbox_center.z + motion_size.z * 1.5  # Yuval Adjustment
                 # Camera directly in front but more elevated (centered on X, negative Y, higher Z)
                 cam_x = motion_bbox_center.x  # Centered on X
                 cam_y = motion_bbox_center.y - camera_distance * 1.0  # Directly in front (negative Y)
@@ -991,6 +1017,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use a very large square floor instead of motion-sized floor."
     )
+    parser.add_argument(
+        "--checkerboard_ground",
+        action="store_true",
+        help="Add a checkerboard pattern to the ground floor."
+    )
     
     # Parse arguments after -- separator (like reference code)
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else sys.argv[1:]
@@ -1023,4 +1054,5 @@ if __name__ == "__main__":
         start_frame=args.start_frame,
         spacing=args.spacing,
         camera_position=args.camera_position,
+        checkerboard_ground=args.checkerboard_ground
     )

@@ -110,6 +110,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use an oversized square floor instead of motion-sized floor."
     )
+    parser.add_argument(
+        "--checkerboard_ground",
+        action="store_true",
+        help="Add a checkerboard pattern to the ground floor."
+    )
     args = parser.parse_args()
 
     print(f"[Python Wrapper] Starting render_human_animation.py")
@@ -129,6 +134,7 @@ if __name__ == "__main__":
     print(f"  - Camera position: {args.camera_position}")
     print(f"  - Floor position mode: {args.floor_position}")
     print(f"  - Independent of motion view: {args.independent_of_motion_view}")
+    print(f"  - Checkerboard ground: {args.checkerboard_ground}")
 
     obj_dir = args.obj_dir
 
@@ -202,6 +208,9 @@ if __name__ == "__main__":
     
     if args.independent_of_motion_view:
         blender_args += " --independent_of_motion_view"
+    
+    if args.checkerboard_ground:
+        blender_args += " --checkerboard_ground"
 
     command = f"/snap/blender/6807/blender --background --python {shlex.quote(blender_script_path)} -- {blender_args}"
     full_command = f"export DISPLAY=:0.0 && {command}"
